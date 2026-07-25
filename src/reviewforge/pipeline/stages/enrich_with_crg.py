@@ -17,7 +17,6 @@ gracefully to today's behavior with a :func:`~reviewforge.runlog.warning`.
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
 from typing import Any
 

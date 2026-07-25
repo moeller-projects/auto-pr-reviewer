@@ -1452,8 +1452,6 @@ class TestVerifyFindingsBatchedRegression:
 class TestEnrichWithCrgStage:
     """Tests for :class:`~reviewforge.pipeline.stages.enrich_with_crg.EnrichWithCrgStage`."""
 
-    from reviewforge.pipeline.stages.enrich_with_crg import EnrichWithCrgStage as _CRGStage  # noqa: N815
-
     def _make_state(self, repo_dir: Path) -> "SimpleNamespace":
         return SimpleNamespace(
             repo_dir=repo_dir,
@@ -1491,8 +1489,9 @@ class TestEnrichWithCrgStage:
     # --- graceful-degradation: package missing ---
 
     def test_degrades_gracefully_when_package_missing(self, cfg, artifacts, tmp_path, monkeypatch):
+        import builtins
+
         from reviewforge.pipeline.stages.enrich_with_crg import EnrichWithCrgStage
-        import builtins, sys
 
         crg_cfg = replace(cfg, crg_enabled=True)
         ctx = _stage_context(crg_cfg, artifacts, MagicMock(), state=self._make_state(tmp_path))

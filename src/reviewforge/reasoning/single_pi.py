@@ -24,7 +24,11 @@ from .engine import ReasoningEngine, register_engine
 
 def _format_crg_context(analysis: dict[str, Any]) -> str:
     """Format CRG analysis as a compact prompt-friendly string."""
-    if not analysis or analysis.get("crg_status") not in (None, "ok"):
+    if not analysis:
+        return ""
+    status = analysis.get("crg_status")
+    # Only format successful analyses; skip if an explicit failure status is set.
+    if status is not None and status != "ok":
         return ""
     lines: list[str] = []
     summary = analysis.get("summary", "")
