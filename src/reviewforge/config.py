@@ -248,6 +248,12 @@ class Config:
     #: Session id used by Pi. Defaults to ``pr-{pr_id}-review-{run_id}``
     #: so the same PR reuses state across reruns.
     pi_session_id: str | None = field(default=None, compare=False)
+    # --- CRG context enrichment -------------------------------------------
+    #: When ``True``, run the CRG Tree-sitter enrichment stage between
+    #: PrepareRepository and ExecuteReasoningEngine. Requires the optional
+    #: ``code-review-graph`` package. Any CRG failure degrades gracefully to
+    #: today's behavior with a logged warning — it is never a failure reason.
+    crg_enabled: bool = field(default=False, compare=False)
 
     # ------------------------------------------------------------------ env --
 
@@ -392,6 +398,7 @@ class Config:
             fast_review=fast_review,
             fast_review_prompt_path=fast_review_prompt_path,
             chunk_synthesis_prompt_path=chunk_synthesis_prompt_path,
+            crg_enabled=is_true(os.getenv("CRG_ENABLED")),
         )
         return cfg
 
@@ -763,6 +770,7 @@ def _build_from_sources(
         pi_session_enabled=pi_session_enabled,
         pi_session_clear=pi_session_clear,
         debug_intermediates=is_true(cli_or_env("debug_intermediates", "DEBUG_INTERMEDIATES")),
+        crg_enabled=is_true(cli_or_env("crg_enabled", "CRG_ENABLED")),
     )
 
 

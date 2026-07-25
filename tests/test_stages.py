@@ -1442,3 +1442,166 @@ class TestVerifyFindingsBatchedRegression:
         assert result.status == StageStatus.OK
         assert result.details == {"findings": 0, "batched": True}
         assert artifacts.raw_dir.is_dir()
+
+
+# ---------------------------------------------------------------------------
+# EnrichWithCrgStage
+# ---------------------------------------------------------------------------
+
+
+class TestEnrichWithCrgStage:
+    """Tests for :class:`~reviewforge.pipeline.stages.enrich_with_crg.EnrichWithCrgStage`."""
+
+    from reviewforge.pipeline.stages.enrich_with_crg import EnrichWithCrgStage as _CRGStage  # noqa: N815
+
+    def _make_state(self, repo_dir: Path) -> "SimpleNamespace":
+        return SimpleNamespace(
+            repo_dir=repo_dir,
+            files=["src/foo.py"],
+            range_spec="HEAD~1..HEAD",
+            diff_text="--- a/src/foo.py\n+++ b/src/foo.py\n@@ -1,1 +1,2 @@\n+# change\n",
+        )
+
+    def _make_cfg_with_crg(self, cfg: Config) -> Config:
+        return replace(cfg, crg_enabled=True)
+
+    # --- should_run gate ---
+
+    def test_skips_when_crg_disabled(self, cfg, artifacts):
+        from reviewforge.pipeline.stages.enrich_with_crg import EnrichWithCrgStage
+        ctx = _stage_context(cfg, artifacts, MagicMock())
+        stage = EnrichWithCrgStage()
+        assert stage.should_run(ctx) is False
+
+    def test_skips_when_state_is_none(self, cfg, artifacts):
+        from reviewforge.pipeline.stages.enrich_with_crg import EnrichWithCrgStage
+        crg_cfg = replace(cfg, crg_enabled=True)
+        ctx = _stage_context(crg_cfg, artifacts, MagicMock())
+        ctx.state = None
+        stage = EnrichWithCrgStage()
+        assert stage.should_run(ctx) is False
+
+    def test_should_run_when_enabled_and_state_present(self, cfg, artifacts, tmp_path):
+        from reviewforge.pipeline.stages.enrich_with_crg import EnrichWithCrgStage
+        crg_cfg = replace(cfg, crg_enabled=True)
+        ctx = _stage_context(crg_cfg, artifacts, MagicMock(), state=self._make_state(tmp_path))
+        stage = EnrichWithCrgStage()
+        assert stage.should_run(ctx) is True
+
+    # --- graceful-degradation: package missing ---
+
+    def test_degrades_gracefully_when_package_missing(self, cfg, artifacts, tmp_path, monkeypatch):
+        from reviewforge.pipeline.stages.enrich_with_crg import EnrichWithCrgStage
+        import builtins, sys
+
+        crg_cfg = replace(cfg, crg_enabled=True)
+        ctx = _stage_context(crg_cfg, artifacts, MagicMock(), state=self._make_state(tmp_path))
+
+        # Simulate package not installed by blocking the import.
+        real_import = builtins.__import__
+
+        def _block_crg(name, *args, **kwargs):
+            if name.startswith("code_review_graph"):
+                raise ImportError("no module named code_review_graph")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", _block_crg)
+        result = EnrichWithCrgStage()(ctx)
+
+        # Stage must succeed (not FAILED) and set crg_status.
+        assert result.status == StageStatus.OK
+        assert result.details.get("crg_status") == "package_unavailable"
+        # No extras written.
+        assert "crg_analysis" not in ctx.extras
+
+    # --- graceful-degradation: build failure ---
+
+    def test_degrades_gracefully_on_build_failure(self, cfg, artifacts, tmp_path, monkeypatch):
+        try:
+            import code_review_graph.incremental as _inc
+        except ImportError:
+            pytest.skip("code-review-graph not installed")
+
+        from reviewforge.pipeline.stages.enrich_with_crg import EnrichWithCrgStage
+
+        crg_cfg = replace(cfg, crg_enabled=True)
+        ctx = _stage_context(crg_cfg, artifacts, MagicMock(), state=self._make_state(tmp_path))
+
+        def _boom(*a, **k):
+            raise RuntimeError("simulated graph build error")
+
+        monkeypatch.setattr(_inc, "full_build", _boom)
+
+        result = EnrichWithCrgStage()(ctx)
+
+        assert result.status == StageStatus.OK
+        assert result.details.get("crg_status") == "build_failed"
+        assert "crg_analysis" not in ctx.extras
+
+    # --- graceful-degradation: analysis failure ---
+
+    def test_degrades_gracefully_on_analysis_failure(self, cfg, artifacts, tmp_path, monkeypatch):
+        try:
+            import code_review_graph.changes as _ch
+            import code_review_graph.incremental as _inc
+        except ImportError:
+            pytest.skip("code-review-graph not installed")
+
+        from reviewforge.pipeline.stages.enrich_with_crg import EnrichWithCrgStage
+
+        crg_cfg = replace(cfg, crg_enabled=True)
+        ctx = _stage_context(crg_cfg, artifacts, MagicMock(), state=self._make_state(tmp_path))
+
+        monkeypatch.setattr(_inc, "full_build", lambda *a, **k: {"nodes": 5})
+        monkeypatch.setattr(_ch, "parse_git_diff_ranges", lambda *a, **k: {})
+
+        def _boom_analysis(*a, **k):
+            raise RuntimeError("analysis boom")
+
+        monkeypatch.setattr(_ch, "analyze_changes", _boom_analysis)
+
+        result = EnrichWithCrgStage()(ctx)
+
+        assert result.status == StageStatus.OK
+        assert result.details.get("crg_status") == "analysis_failed"
+        assert "crg_analysis" not in ctx.extras
+
+    # --- happy path ---
+
+    def test_happy_path_stores_analysis_in_extras_and_artifact(self, cfg, artifacts, tmp_path, monkeypatch):
+        try:
+            import code_review_graph.changes as _ch
+            import code_review_graph.incremental as _inc
+        except ImportError:
+            pytest.skip("code-review-graph not installed")
+
+        from reviewforge.pipeline.stages.enrich_with_crg import EnrichWithCrgStage
+
+        crg_cfg = replace(cfg, crg_enabled=True)
+        ctx = _stage_context(crg_cfg, artifacts, MagicMock(), state=self._make_state(tmp_path))
+
+        fake_analysis = {
+            "summary": "Analyzed 1 file",
+            "risk_score": 0.42,
+            "changed_functions": [{"name": "foo", "qualified_name": "src.foo", "risk_score": 0.42}],
+            "affected_flows": [],
+            "test_gaps": [{"name": "foo", "qualified_name": "src.foo", "file": "src/foo.py", "line_start": 1, "line_end": 5}],
+            "review_priorities": [],
+            "functions_truncated": False,
+        }
+
+        monkeypatch.setattr(_inc, "full_build", lambda *a, **k: {"nodes": 10})
+        monkeypatch.setattr(_ch, "analyze_changes", lambda *a, **k: fake_analysis)
+        monkeypatch.setattr(_ch, "parse_git_diff_ranges", lambda *a, **k: {})
+
+        result = EnrichWithCrgStage()(ctx)
+
+        assert result.status == StageStatus.OK
+        assert result.details["crg_status"] == "ok"
+        assert result.details["crg_risk_score"] == 0.42
+        assert result.details["crg_test_gaps"] == 1
+        assert ctx.extras["crg_analysis"] is fake_analysis
+        # Artifact written.
+        assert artifacts.crg_analysis.exists()
+        written = json.loads(artifacts.crg_analysis.read_text())
+        assert written["risk_score"] == 0.42

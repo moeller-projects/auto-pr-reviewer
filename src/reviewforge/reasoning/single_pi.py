@@ -22,6 +22,33 @@ from ..runlog import warning as log_warning
 from .engine import ReasoningEngine, register_engine
 
 
+def _format_crg_context(analysis: dict[str, Any]) -> str:
+    """Format CRG analysis as a compact prompt-friendly string."""
+    if not analysis or analysis.get("crg_status") not in (None, "ok"):
+        return ""
+    lines: list[str] = []
+    summary = analysis.get("summary", "")
+    if summary:
+        lines.append(summary)
+    priorities = analysis.get("review_priorities", [])
+    if priorities:
+        lines.append("Review priorities (highest risk first):")
+        for item in priorities[:10]:
+            name = item.get("qualified_name") or item.get("name", "?")
+            risk = item.get("risk_score", 0)
+            lines.append(f"  - {name} (risk={risk:.2f})")
+    test_gaps = analysis.get("test_gaps", [])
+    if test_gaps:
+        lines.append("Functions without test coverage:")
+        for gap in test_gaps[:10]:
+            qn = gap.get("qualified_name") or gap.get("name", "?")
+            lines.append(f"  - {qn}")
+    affected_flows = analysis.get("affected_flows", [])
+    if affected_flows:
+        lines.append(f"Affected flows: {', '.join(str(f) for f in affected_flows[:5])}")
+    return "\n".join(lines)
+
+
 def _runner_usage(runner: Any) -> dict[str, int]:
     usage = getattr(runner, "token_usage", None)
     if isinstance(usage, dict):
@@ -68,6 +95,10 @@ def _build_single_pi_prefix(ctx: StageContext) -> str:
                 "\nDo not re-raise dismissed findings unless the implicated code changed in THIS diff. "
                 "Treat fixed findings as addressed, but flag them when reintroduced and set regression=true.",
             ]
+    if crg_analysis := ctx.extras.get("crg_analysis"):
+        _crg_summary = _format_crg_context(crg_analysis)
+        if _crg_summary:
+            parts += ["\nStatic code-graph analysis (Tree-sitter, deterministic):\n" + _crg_summary]
     return "\n".join(parts)
 
 
