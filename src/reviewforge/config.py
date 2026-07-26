@@ -254,6 +254,14 @@ class Config:
     #: ``code-review-graph`` package. Any CRG failure degrades gracefully to
     #: today's behavior with a logged warning — it is never a failure reason.
     crg_enabled: bool = field(default=False, compare=False)
+    #: Optional override for the CRG graph-cache root. Defaults to
+    #: ``<review_artifact_root>/crg-cache``. Point it at a dedicated
+    #: persistent volume (env ``CRG_CACHE_DIR``) to keep graph DBs off the
+    #: artifact tree.
+    crg_cache_dir: Path | None = field(default=None, compare=False)
+    #: Byte cap for the deterministic graph-context block injected into the
+    #: single-pi prompt prefix (env ``CRG_CONTEXT_MAX_BYTES``).
+    crg_context_max_bytes: int = field(default=8192, compare=False)
 
     # ------------------------------------------------------------------ env --
 
@@ -399,6 +407,8 @@ class Config:
             fast_review_prompt_path=fast_review_prompt_path,
             chunk_synthesis_prompt_path=chunk_synthesis_prompt_path,
             crg_enabled=is_true(os.getenv("CRG_ENABLED")),
+            crg_cache_dir=Path(os.environ["CRG_CACHE_DIR"]) if os.getenv("CRG_CACHE_DIR") else None,
+            crg_context_max_bytes=int(os.getenv("CRG_CONTEXT_MAX_BYTES", "8192")),
         )
         return cfg
 
@@ -771,6 +781,10 @@ def _build_from_sources(
         pi_session_clear=pi_session_clear,
         debug_intermediates=is_true(cli_or_env("debug_intermediates", "DEBUG_INTERMEDIATES")),
         crg_enabled=is_true(cli_or_env("crg_enabled", "CRG_ENABLED")),
+        crg_cache_dir=Path(crg_cache_dir_raw) if (crg_cache_dir_raw := cli_or_env("crg_cache_dir", "CRG_CACHE_DIR")) else None,
+        crg_context_max_bytes=require_uint(
+            "CRG_CONTEXT_MAX_BYTES", cli_or_env("crg_context_max_bytes", "CRG_CONTEXT_MAX_BYTES", "8192")
+        ),
     )
 
 

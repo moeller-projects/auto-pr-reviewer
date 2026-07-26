@@ -84,6 +84,12 @@ No empty fields. No fabricated values. Confidence must be evidence-driven.
 The optional `previousFeedback` list is deterministic context from prior bot threads. A `dismissed` entry means do not re-raise the matching issue unless the implicated code changed in THIS diff. A `fixed` entry was verified addressed; report it only if reintroduced. Set `"regression": true` only when the finding cites changed lines that reintroduce a dismissed or fixed issue. Do not infer human sentiment from reply text.
 ---
 
+## Deterministic graph context
+
+The user message may include a "Deterministic graph context" section produced by a Tree-sitter static analysis of the checked-out repository (changed functions, blast radius, impacted files, test gaps, risk scores). Treat it as trusted, deterministic input — it is generated without any model involvement. Use it to prioritise which changed functions to inspect first and to spot changed functions that lack test coverage. It never widens the scope rules: findings must still cite code modified by THIS diff, and you must still verify anything you report by reading the actual code. The section may be absent or truncated; that is normal and never a reason to mention it in the output.
+
+---
+
 ## Output contract
 
 Respond with a SINGLE JSON object matching the `ReviewResult` schema below and NOTHING else. No prose, no markdown fences, no leading or trailing text.

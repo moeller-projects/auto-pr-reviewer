@@ -99,3 +99,48 @@ class TestValidateFiles:
         )
         with pytest.raises(ConfigError, match="Required file not found"):
             cfg.validate_files()
+
+
+class TestCrgConfig:
+    """CRG cache-dir and prompt-cap configuration resolution."""
+
+    def test_defaults(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "tok")
+        monkeypatch.setenv("WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("CLONE_ROOT", str(tmp_path))
+        monkeypatch.delenv("CRG_CACHE_DIR", raising=False)
+        monkeypatch.delenv("CRG_CONTEXT_MAX_BYTES", raising=False)
+        cfg = Config.from_env()
+        assert cfg.crg_enabled is False
+        assert cfg.crg_cache_dir is None
+        assert cfg.crg_context_max_bytes == 8192
+
+    def test_from_env_resolves_crg_vars(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "tok")
+        monkeypatch.setenv("WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("CLONE_ROOT", str(tmp_path))
+        monkeypatch.setenv("CRG_ENABLED", "1")
+        monkeypatch.setenv("CRG_CACHE_DIR", str(tmp_path / "crg-vol"))
+        monkeypatch.setenv("CRG_CONTEXT_MAX_BYTES", "4096")
+        cfg = Config.from_env()
+        assert cfg.crg_enabled is True
+        assert cfg.crg_cache_dir == tmp_path / "crg-vol"
+        assert cfg.crg_context_max_bytes == 4096
+
+    def test_from_sources_resolves_crg_vars(self, tmp_path):
+        cfg = Config.from_sources(
+            env={
+                "ADO_AUTH_TOKEN": "tok",
+                "CRG_ENABLED": "1",
+                "CRG_CACHE_DIR": str(tmp_path / "crg-vol"),
+                "CRG_CONTEXT_MAX_BYTES": "2048",
+            }
+        )
+        assert cfg.crg_enabled is True
+        assert cfg.crg_cache_dir == tmp_path / "crg-vol"
+        assert cfg.crg_context_max_bytes == 2048
+
+    def test_from_sources_defaults_without_crg_vars(self):
+        cfg = Config.from_sources(env={"ADO_AUTH_TOKEN": "tok"})
+        assert cfg.crg_cache_dir is None
+        assert cfg.crg_context_max_bytes == 8192

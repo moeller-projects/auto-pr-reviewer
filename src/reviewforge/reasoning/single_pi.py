@@ -22,35 +22,73 @@ from ..runlog import warning as log_warning
 from .engine import ReasoningEngine, register_engine
 
 
-def _format_crg_context(analysis: dict[str, Any]) -> str:
-    """Format CRG analysis as a compact prompt-friendly string."""
+#: Subsection caps for the deterministic graph-context prompt block. Keep
+#: the block small and bounded; the model can read files for anything else.
+_CRG_MAX_PRIORITIES = 5
+_CRG_MAX_FUNCTIONS = 15
+_CRG_MAX_PATHS = 30
+_CRG_MAX_TEST_GAPS = 15
+
+
+def _crg_entry_sort_key(item: dict[str, Any]) -> tuple:
+    """Deterministic ordering: risk descending, then path/name ascending."""
+    name = item.get("qualified_name") or item.get("name") or ""
+    return (-float(item.get("risk_score", 0) or 0), str(item.get("file") or ""), str(name))
+
+
+def _format_crg_context(analysis: dict[str, Any], max_bytes: int) -> str:
+    """Format CRG analysis as a compact, deterministic prompt block.
+
+    Only ``ok``/``degraded`` analyses produce output; anything else (failed,
+    unavailable, malformed) yields an empty string so the prompt stays
+    byte-identical to the pre-integration shape. The block is capped at
+    ``max_bytes`` (UTF-8 safe) with bounded subsections.
+    """
     if not analysis:
         return ""
-    status = analysis.get("crg_status")
-    # Only format successful analyses; skip if an explicit failure status is set.
-    if status is not None and status != "ok":
+    status = analysis.get("status") or analysis.get("crg_status")
+    if status not in {"ok", "degraded"}:
         return ""
     lines: list[str] = []
     summary = analysis.get("summary", "")
     if summary:
-        lines.append(summary)
-    priorities = analysis.get("review_priorities", [])
+        lines.append(str(summary).strip())
+    if status == "degraded":
+        lines.append("Note: analysis was truncated at the tool's function cap; results are partial.")
+    risk = analysis.get("risk_score")
+    if isinstance(risk, (int, float)):
+        lines.append(f"Overall risk score: {risk:.2f}")
+    priorities = sorted(analysis.get("review_priorities") or [], key=_crg_entry_sort_key)
     if priorities:
         lines.append("Review priorities (highest risk first):")
-        for item in priorities[:10]:
+        for item in priorities[:_CRG_MAX_PRIORITIES]:
             name = item.get("qualified_name") or item.get("name", "?")
-            risk = item.get("risk_score", 0)
-            lines.append(f"  - {name} (risk={risk:.2f})")
-    test_gaps = analysis.get("test_gaps", [])
+            lines.append(f"  - {name} (risk={float(item.get('risk_score', 0) or 0):.2f})")
+    functions = sorted(analysis.get("changed_functions") or [], key=_crg_entry_sort_key)
+    if functions:
+        lines.append("Changed functions (highest risk first):")
+        for item in functions[:_CRG_MAX_FUNCTIONS]:
+            name = item.get("qualified_name") or item.get("name", "?")
+            file = item.get("file", "?")
+            lines.append(f"  - {name} ({file}, risk={float(item.get('risk_score', 0) or 0):.2f})")
+    impacted = sorted(str(p) for p in (analysis.get("impacted_files") or []))
+    if impacted:
+        lines.append("Impacted files:")
+        for path in impacted[:_CRG_MAX_PATHS]:
+            lines.append(f"  - {path}")
+    test_gaps = sorted(analysis.get("test_gaps") or [], key=_crg_entry_sort_key)
     if test_gaps:
         lines.append("Functions without test coverage:")
-        for gap in test_gaps[:10]:
+        for gap in test_gaps[:_CRG_MAX_TEST_GAPS]:
             qn = gap.get("qualified_name") or gap.get("name", "?")
             lines.append(f"  - {qn}")
-    affected_flows = analysis.get("affected_flows", [])
+    affected_flows = analysis.get("affected_flows") or []
     if affected_flows:
-        lines.append(f"Affected flows: {', '.join(str(f) for f in affected_flows[:5])}")
-    return "\n".join(lines)
+        lines.append(f"Affected flows: {', '.join(str(f) for f in affected_flows[:_CRG_MAX_PRIORITIES])}")
+    text = "\n".join(lines)
+    if max_bytes > 0:
+        text = _utf8_prefix(text, max_bytes)
+    return text
 
 
 def _runner_usage(runner: Any) -> dict[str, int]:
@@ -100,9 +138,11 @@ def _build_single_pi_prefix(ctx: StageContext) -> str:
                 "Treat fixed findings as addressed, but flag them when reintroduced and set regression=true.",
             ]
     if crg_analysis := ctx.extras.get("crg_analysis"):
-        _crg_summary = _format_crg_context(crg_analysis)
+        _crg_summary = _format_crg_context(
+            crg_analysis, getattr(ctx.cfg, "crg_context_max_bytes", 8192)
+        )
         if _crg_summary:
-            parts += ["\nStatic code-graph analysis (Tree-sitter, deterministic):\n" + _crg_summary]
+            parts += ["\nDeterministic graph context (Tree-sitter code-review graph):\n" + _crg_summary]
     return "\n".join(parts)
 
 
