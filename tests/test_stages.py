@@ -1463,22 +1463,38 @@ class _FakeGraphStore:
         self.db_path.touch(exist_ok=True)
 
 
-def _fake_crg_analysis(**overrides):
+def _fake_crg_analysis(root: str = "/repo", **overrides):
+    """Analysis payload matching code-review-graph 2.3.7."""
     doc = {
         "summary": "Analyzed 1 file",
         "risk_score": 0.42,
         "changed_functions": [
-            {"name": "foo", "qualified_name": "src.foo", "file": "src/foo.py", "risk_score": 0.42}
+            {
+                "name": "foo",
+                "qualified_name": f"{root}/src/foo.py::foo",
+                "file_path": f"{root}/src/foo.py",
+                "risk_score": 0.42,
+            }
         ],
         "affected_flows": [],
         "test_gaps": [
-            {"name": "foo", "qualified_name": "src.foo", "file": "src/foo.py", "line_start": 1, "line_end": 5}
+            {
+                "name": "foo",
+                "qualified_name": f"{root}/src/foo.py::foo",
+                "file_path": f"{root}/src/foo.py",
+                "line_start": 1,
+                "line_end": 5,
+            }
         ],
         "review_priorities": [],
         "functions_truncated": False,
     }
     doc.update(overrides)
     return doc
+
+
+def _default_analyze(store, files, *, changed_ranges=None, repo_root=None):
+    return _fake_crg_analysis(root=repo_root or "/repo")
 
 
 def _install_fake_crg(
@@ -1502,7 +1518,7 @@ def _install_fake_crg(
     if incremental_update is not None:
         inc.incremental_update = incremental_update
     changes = types.ModuleType("code_review_graph.changes")
-    changes.analyze_changes = analyze_changes or (lambda *a, **k: _fake_crg_analysis())
+    changes.analyze_changes = analyze_changes or _default_analyze
     changes.parse_git_diff_ranges = lambda *a, **k: {}
     pkg.graph = graph
     pkg.incremental = inc
@@ -1688,7 +1704,7 @@ class TestEnrichWithCrgStage:
         }
         assert set(written["build"]) == {"mode", "duration_ms"}
         # impacted_files: sorted union of files from functions/priorities/gaps.
-        assert written["impacted_files"] == ["src/a.py", "src/b.py", "src/foo.py"]
+        assert written["impacted_files"] == ["/repo/src/foo.py", "src/a.py", "src/b.py"]
 
     def test_degraded_status_when_functions_truncated(self, cfg, artifacts, tmp_path, monkeypatch):
         _install_fake_crg(
@@ -1713,7 +1729,7 @@ class TestEnrichWithCrgStage:
         first = json.loads(artifacts.crg_analysis.read_text())
 
         artifacts2 = manager.create(replace(crg_cfg, review_run_id="run-2"))
-        result2, _ = self._run_ctx(crg_cfg, artifacts2, self._make_state(tmp_path))
+        result2, _ = self._run_ctx(crg_cfg, artifacts2, self._make_state(tmp_path / "other-repo"))
         assert result2.status == StageStatus.OK
         second = json.loads(artifacts2.crg_analysis.read_text())
 
@@ -1932,3 +1948,35 @@ class TestEnrichWithCrgStage:
             MagicMock(side_effect=importlib_metadata.PackageNotFoundError("nope")),
         )
         assert stage_mod._crg_version() == "unknown"
+
+    def test_real_payload_paths_are_relative_and_impacted_files_populated(self, cfg, artifacts, tmp_path, monkeypatch):
+        """CRG 2.3.7 emits file_path and absolute checkout-qualified names."""
+        _install_fake_crg(monkeypatch)
+        crg_cfg = replace(cfg, crg_enabled=True)
+        result, _ = self._run_ctx(crg_cfg, artifacts, self._make_state(tmp_path))
+        assert result.status == StageStatus.OK
+        written = json.loads(artifacts.crg_analysis.read_text())
+        assert written["impacted_files"] == ["src/foo.py"]
+        assert written["changed_functions"][0]["file_path"] == "src/foo.py"
+        assert written["changed_functions"][0]["qualified_name"] == "src/foo.py::foo"
+        assert str(tmp_path) not in artifacts.crg_analysis.read_text()
+
+    def test_unwritable_cache_root_degrades_gracefully(self, cfg, artifacts, tmp_path, monkeypatch):
+        _install_fake_crg(monkeypatch)
+        blocker = tmp_path / "cache-file"
+        blocker.write_text("not a directory", encoding="utf-8")
+        crg_cfg = replace(cfg, crg_enabled=True, crg_cache_dir=blocker / "crg")
+        result, ctx = self._run_ctx(crg_cfg, artifacts, self._make_state(tmp_path))
+        assert result.status == StageStatus.OK
+        assert result.details["crg_status"] == "build_failed"
+        assert json.loads(artifacts.crg_analysis.read_text())["status"] == "failed"
+        assert "crg_analysis" not in ctx.extras
+
+    def test_non_object_analysis_degrades_gracefully(self, cfg, artifacts, tmp_path, monkeypatch):
+        _install_fake_crg(monkeypatch, analyze_changes=lambda *a, **k: ["junk"])
+        crg_cfg = replace(cfg, crg_enabled=True)
+        result, ctx = self._run_ctx(crg_cfg, artifacts, self._make_state(tmp_path))
+        assert result.status == StageStatus.OK
+        assert result.details["crg_status"] == "analysis_failed"
+        assert json.loads(artifacts.crg_analysis.read_text())["status"] == "failed"
+        assert "crg_analysis" not in ctx.extras

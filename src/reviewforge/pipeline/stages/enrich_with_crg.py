@@ -77,18 +77,18 @@ class EnrichWithCrgStage(Stage):
             _write_failure_document(ctx, tool_version=None, error="package unavailable")
             return {"crg_status": "package_unavailable"}
 
-        tool_version = _crg_version()
-        db_path = _crg_db_path(ctx, tool_version)
-        # Decide cold vs warm BEFORE constructing GraphStore: opening the
-        # SQLite database creates the file eagerly, so an existence check
-        # afterwards would always report "warm" and the cold full build
-        # would never run.
-        db_existed = db_path.exists()
-
+        tool_version = "unknown"
         build_mode = "full"
         build_duration_ms = 0
         node_count = 0
         try:
+            tool_version = _crg_version()
+            db_path = _crg_db_path(ctx, tool_version)
+            # Decide cold vs warm BEFORE constructing GraphStore: opening the
+            # SQLite database creates the file eagerly, so an existence check
+            # afterwards would always report "warm" and the cold full build
+            # would never run.
+            db_existed = db_path.exists()
             store = GraphStore(db_path)
             incremental_update = getattr(_crg_inc, "incremental_update", None)
             started = time.monotonic()
@@ -147,6 +147,8 @@ class EnrichWithCrgStage(Stage):
                 changed_ranges=changed_ranges,
                 repo_root=root_str,
             )
+            if not isinstance(analysis, dict):
+                raise ValueError("CRG analysis returned a non-object payload")
         except Exception as exc:  # noqa: BLE001
             log_warning(f"CRG analysis failed ({type(exc).__name__}: {exc}); skipping enrichment")
             _write_failure_document(ctx, tool_version=tool_version, error=str(exc))
@@ -160,6 +162,7 @@ class EnrichWithCrgStage(Stage):
             status=status,
             tool_version=tool_version,
             build={"mode": build_mode, "duration_ms": build_duration_ms},
+            repo_root=str(repo_dir),
         )
 
         try:
@@ -217,14 +220,33 @@ def _safe_repo_id(repo_id: str) -> str:
     return sanitised or "default"
 
 
+def _strip_root(value: Any, repo_root: str) -> Any:
+    """Strip the disposable absolute checkout prefix from analysis strings."""
+    prefix = repo_root + "/"
+    if isinstance(value, str):
+        return value.removeprefix(prefix) if value.startswith(prefix) else value
+    if isinstance(value, list):
+        return [_strip_root(item, repo_root) for item in value]
+    if isinstance(value, dict):
+        return {key: _strip_root(item, repo_root) for key, item in value.items()}
+    return value
+
+
+def _entry_file(item: dict[str, Any]) -> str | None:
+    """Return an entry's file; CRG node payloads use ``file_path``."""
+    path = item.get("file_path") or item.get("file")
+    return str(path) if path else None
+
+
 def _impacted_files(analysis: dict[str, Any]) -> list[str]:
     """Return the sorted unique file set touched by the analysis."""
     files: set[str] = set()
     for key in ("changed_functions", "review_priorities", "test_gaps"):
         for item in analysis.get(key) or []:
-            path = item.get("file") if isinstance(item, dict) else None
-            if path:
-                files.add(str(path))
+            if isinstance(item, dict):
+                path = _entry_file(item)
+                if path:
+                    files.add(path)
     return sorted(files)
 
 
@@ -249,6 +271,7 @@ def _build_document(
     status: str,
     tool_version: str,
     build: dict[str, Any],
+    repo_root: str,
 ) -> dict[str, Any]:
     """Compose the canonical ``crg-analysis.json`` document."""
     document = _base_document(tool_version)
@@ -265,7 +288,7 @@ def _build_document(
     )
     if analysis.get("functions_truncated"):
         document["functions_truncated"] = True
-    return document
+    return _strip_root(document, repo_root)
 
 
 def _write_failure_document(ctx: StageContext, *, tool_version: str | None, error: str) -> None:
