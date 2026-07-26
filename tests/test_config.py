@@ -144,3 +144,15 @@ class TestCrgConfig:
         cfg = Config.from_sources(env={"ADO_AUTH_TOKEN": "tok"})
         assert cfg.crg_cache_dir is None
         assert cfg.crg_context_max_bytes == 8192
+
+    def test_from_env_rejects_non_numeric_crg_cap(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "tok")
+        monkeypatch.setenv("WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("CLONE_ROOT", str(tmp_path))
+        monkeypatch.setenv("CRG_CONTEXT_MAX_BYTES", "lots")
+        with pytest.raises(ConfigError, match="CRG_CONTEXT_MAX_BYTES"):
+            Config.from_env()
+
+    def test_from_sources_rejects_non_numeric_crg_cap(self):
+        with pytest.raises(ConfigError, match="CRG_CONTEXT_MAX_BYTES"):
+            Config.from_sources(env={"ADO_AUTH_TOKEN": "tok", "CRG_CONTEXT_MAX_BYTES": "-1"})

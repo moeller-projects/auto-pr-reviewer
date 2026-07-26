@@ -260,7 +260,8 @@ class Config:
     #: artifact tree.
     crg_cache_dir: Path | None = field(default=None, compare=False)
     #: Byte cap for the deterministic graph-context block injected into the
-    #: single-pi prompt prefix (env ``CRG_CONTEXT_MAX_BYTES``).
+    #: single-pi prompt prefix (env ``CRG_CONTEXT_MAX_BYTES``). ``0`` disables
+    #: the injection.
     crg_context_max_bytes: int = field(default=8192, compare=False)
 
     # ------------------------------------------------------------------ env --
@@ -408,7 +409,9 @@ class Config:
             chunk_synthesis_prompt_path=chunk_synthesis_prompt_path,
             crg_enabled=is_true(os.getenv("CRG_ENABLED")),
             crg_cache_dir=Path(os.environ["CRG_CACHE_DIR"]) if os.getenv("CRG_CACHE_DIR") else None,
-            crg_context_max_bytes=int(os.getenv("CRG_CONTEXT_MAX_BYTES", "8192")),
+            crg_context_max_bytes=require_uint(
+                "CRG_CONTEXT_MAX_BYTES", os.getenv("CRG_CONTEXT_MAX_BYTES", "8192")
+            ),
         )
         return cfg
 

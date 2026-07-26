@@ -1071,3 +1071,40 @@ class TestCrgPromptInjection:
         doc = self._crg_document(affected_flows=["flow_a", "flow_b"])
         text = _format_crg_context(doc, 8192)
         assert "Affected flows: flow_a, flow_b" in text
+
+    def test_malformed_entries_are_dropped_not_fatal(self):
+        from reviewforge.reasoning.single_pi import _format_crg_context
+
+        doc = self._crg_document(
+            changed_functions=[
+                "garbage",
+                {"qualified_name": "mod.ok", "file": "src/ok.py", "risk_score": "high"},
+                None,
+                {"name": "mod.nonnumeric", "file_path": "src/nn.py", "risk_score": "high"},
+            ],
+            review_priorities=[{"qualified_name": "mod.bad", "risk_score": "not-a-number"}],
+            risk_score="not-a-number",
+        )
+        text = _format_crg_context(doc, 8192)
+        assert "mod.ok" in text
+        assert "mod.nonnumeric" in text
+        assert "risk=0.00" in text
+        assert "Overall risk score" not in text
+
+    def test_non_positive_cap_disables_injection(self, tmp_path):
+        from dataclasses import replace as _replace
+        from reviewforge.reasoning.single_pi import _build_single_pi_prefix, _format_crg_context
+
+        doc = self._crg_document()
+        assert _format_crg_context(doc, 0) == ""
+        assert _format_crg_context(doc, -5) == ""
+        cfg = _replace(_cfg(tmp_path), crg_context_max_bytes=0)
+        ctx = _stage_context(cfg, MagicMock())
+        baseline = _build_single_pi_prefix(ctx)
+        ctx.extras["crg_analysis"] = doc
+        assert _build_single_pi_prefix(ctx) == baseline
+
+    def test_non_object_analysis_is_ignored(self):
+        from reviewforge.reasoning.single_pi import _format_crg_context
+
+        assert _format_crg_context(["junk"], 8192) == ""
