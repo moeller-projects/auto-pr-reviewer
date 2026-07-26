@@ -1597,6 +1597,7 @@ class TestEnrichWithCrgStage:
 
         assert result.status == StageStatus.OK
         assert result.details["crg_status"] == "ok"
+        assert result.details["crg_build_mode"] == "full"
         assert result.details["crg_risk_score"] == 0.42
         assert result.details["crg_test_gaps"] == 1
         assert ctx.extras["crg_analysis"] is fake_analysis
@@ -1604,3 +1605,99 @@ class TestEnrichWithCrgStage:
         assert artifacts.crg_analysis.exists()
         written = json.loads(artifacts.crg_analysis.read_text())
         assert written["risk_score"] == 0.42
+        # DB placed in the persistent per-repo cache directory, not under raw/.
+        expected_db = crg_cfg.review_artifact_root / "crg-cache" / "api" / "crg.db"
+        assert expected_db.parent.exists()
+
+    # --- graph cache persistence ---
+
+    def test_first_run_uses_full_build(self, cfg, artifacts, tmp_path, monkeypatch):
+        """When no cached DB exists the stage must call full_build."""
+        try:
+            import code_review_graph.changes as _ch
+            import code_review_graph.incremental as _inc
+        except ImportError:
+            pytest.skip("code-review-graph not installed")
+
+        from reviewforge.pipeline.stages.enrich_with_crg import EnrichWithCrgStage
+
+        crg_cfg = replace(cfg, crg_enabled=True)
+        ctx = _stage_context(crg_cfg, artifacts, MagicMock(), state=self._make_state(tmp_path))
+
+        calls: list[str] = []
+        monkeypatch.setattr(_inc, "full_build", lambda *a, **k: (calls.append("full"), {"nodes": 3})[1])
+        monkeypatch.setattr(_inc, "incremental_update", lambda *a, **k: (calls.append("inc"), {"nodes": 3})[1], raising=False)
+        monkeypatch.setattr(_ch, "analyze_changes", lambda *a, **k: {"risk_score": 0.0, "changed_functions": [], "affected_flows": [], "test_gaps": [], "review_priorities": []})
+        monkeypatch.setattr(_ch, "parse_git_diff_ranges", lambda *a, **k: {})
+
+        result = EnrichWithCrgStage()(ctx)
+
+        assert result.status == StageStatus.OK
+        assert result.details["crg_build_mode"] == "full"
+        assert calls == ["full"]
+
+    def test_subsequent_run_uses_incremental_update(self, cfg, artifacts, tmp_path, monkeypatch):
+        """When a cached DB already exists the stage must call incremental_update."""
+        try:
+            import code_review_graph.changes as _ch
+            import code_review_graph.incremental as _inc
+        except ImportError:
+            pytest.skip("code-review-graph not installed")
+
+        from reviewforge.pipeline.stages.enrich_with_crg import EnrichWithCrgStage
+
+        crg_cfg = replace(cfg, crg_enabled=True)
+        ctx = _stage_context(crg_cfg, artifacts, MagicMock(), state=self._make_state(tmp_path))
+
+        # Pre-create the persistent DB file to simulate a previous run.
+        db_path = crg_cfg.review_artifact_root / "crg-cache" / "api" / "crg.db"
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        db_path.touch()
+
+        calls: list[str] = []
+        monkeypatch.setattr(_inc, "full_build", lambda *a, **k: (calls.append("full"), {"nodes": 3})[1])
+        monkeypatch.setattr(_inc, "incremental_update", lambda *a, **k: (calls.append("inc"), {"nodes": 3})[1], raising=False)
+        monkeypatch.setattr(_ch, "analyze_changes", lambda *a, **k: {"risk_score": 0.0, "changed_functions": [], "affected_flows": [], "test_gaps": [], "review_priorities": []})
+        monkeypatch.setattr(_ch, "parse_git_diff_ranges", lambda *a, **k: {})
+
+        result = EnrichWithCrgStage()(ctx)
+
+        assert result.status == StageStatus.OK
+        assert result.details["crg_build_mode"] == "incremental"
+        assert calls == ["inc"]
+
+    def test_falls_back_to_full_build_when_incremental_update_fails(self, cfg, artifacts, tmp_path, monkeypatch):
+        """When incremental_update raises the stage must fall back to full_build."""
+        try:
+            import code_review_graph.changes as _ch
+            import code_review_graph.incremental as _inc
+        except ImportError:
+            pytest.skip("code-review-graph not installed")
+
+        from reviewforge.pipeline.stages.enrich_with_crg import EnrichWithCrgStage
+
+        crg_cfg = replace(cfg, crg_enabled=True)
+        ctx = _stage_context(crg_cfg, artifacts, MagicMock(), state=self._make_state(tmp_path))
+
+        # Pre-create the persistent DB file to simulate a previous run.
+        db_path = crg_cfg.review_artifact_root / "crg-cache" / "api" / "crg.db"
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        db_path.touch()
+
+        calls: list[str] = []
+        monkeypatch.setattr(_inc, "full_build", lambda *a, **k: (calls.append("full"), {"nodes": 3})[1])
+
+        def _boom_inc(*a, **k):
+            calls.append("inc_failed")
+            raise RuntimeError("simulated incremental failure")
+
+        monkeypatch.setattr(_inc, "incremental_update", _boom_inc, raising=False)
+        monkeypatch.setattr(_ch, "analyze_changes", lambda *a, **k: {"risk_score": 0.0, "changed_functions": [], "affected_flows": [], "test_gaps": [], "review_priorities": []})
+        monkeypatch.setattr(_ch, "parse_git_diff_ranges", lambda *a, **k: {})
+
+        result = EnrichWithCrgStage()(ctx)
+
+        assert result.status == StageStatus.OK
+        assert result.details["crg_build_mode"] == "full"
+        assert calls == ["inc_failed", "full"]
+

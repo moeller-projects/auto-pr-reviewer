@@ -11,12 +11,21 @@ The result is stored in ``ctx.extras["crg_analysis"]`` so that
 forward it as structured context to the model. It is also written as
 ``crg-analysis.json`` in the run artifact directory.
 
+The graph DB is stored at
+``<review_artifact_root>/crg-cache/<repo_id>/crg.db`` and **persisted
+across runs**.  On the first run for a repository the full build is
+performed (~10 s per 500 files).  On subsequent runs an incremental
+update is applied (<2 s, SHA-256-based) when the ``code-review-graph``
+package exposes ``incremental_update``; the stage falls back to a full
+build if the symbol is absent or the incremental step raises.
+
 This stage MUST NOT raise on any CRG failure. Any error degrades
 gracefully to today's behavior with a :func:`~reviewforge.runlog.warning`.
 """
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +57,7 @@ class EnrichWithCrgStage(Stage):
 
         try:
             from code_review_graph.graph import GraphStore
+            import code_review_graph.incremental as _crg_inc
             from code_review_graph.incremental import full_build
             from code_review_graph.changes import analyze_changes, parse_git_diff_ranges
         except ImportError:
@@ -60,9 +70,23 @@ class EnrichWithCrgStage(Stage):
         try:
             db_path = _crg_db_path(ctx)
             store = GraphStore(db_path)
-            build_result = full_build(repo_dir, store)
+            incremental_update = getattr(_crg_inc, "incremental_update", None)
+            if db_path.exists() and incremental_update is not None:
+                try:
+                    build_result = incremental_update(repo_dir, store)
+                    build_mode = "incremental"
+                except Exception as exc:  # noqa: BLE001
+                    log_warning(
+                        f"CRG incremental update failed ({type(exc).__name__}: {exc}); "
+                        "falling back to full build"
+                    )
+                    build_result = full_build(repo_dir, store)
+                    build_mode = "full"
+            else:
+                build_result = full_build(repo_dir, store)
+                build_mode = "full"
             node_count: int = build_result.get("nodes", 0) if isinstance(build_result, dict) else 0
-            _log(f"CRG graph built: {node_count} nodes from {repo_dir}")
+            _log(f"CRG graph {build_mode} build: {node_count} nodes from {repo_dir}")
         except Exception as exc:  # noqa: BLE001
             log_warning(f"CRG graph build failed ({type(exc).__name__}: {exc}); skipping enrichment")
             return {"crg_status": "build_failed", "crg_error": str(exc)}
@@ -109,6 +133,7 @@ class EnrichWithCrgStage(Stage):
         )
         return {
             "crg_status": "ok",
+            "crg_build_mode": build_mode,
             "crg_nodes": node_count,
             "crg_risk_score": analysis.get("risk_score", 0),
             "crg_changed_functions": len(analysis.get("changed_functions", [])),
@@ -117,8 +142,22 @@ class EnrichWithCrgStage(Stage):
 
 
 def _crg_db_path(ctx: StageContext) -> Path:
-    """Return a per-run SQLite path for the CRG graph, under raw/."""
-    return ctx.artifacts.raw_dir / "crg.db"
+    """Return the persistent per-repo SQLite path for the CRG graph.
+
+    Stored at ``<review_artifact_root>/crg-cache/<repo_id>/crg.db`` and
+    shared across all runs for the same repository.  The directory is
+    created eagerly so that ``GraphStore`` can open the file on first use.
+    """
+    repo_id = _safe_repo_id(ctx.cfg.ado_repo_id or "default")
+    cache_dir = ctx.cfg.review_artifact_root / "crg-cache" / repo_id
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir / "crg.db"
+
+
+def _safe_repo_id(repo_id: str) -> str:
+    """Sanitise *repo_id* so it is safe to use as a directory name."""
+    sanitised = re.sub(r"[^\w-]", "_", repo_id)
+    return sanitised or "default"
 
 
 def _write_artifact(ctx: StageContext, analysis: dict[str, Any]) -> None:
