@@ -11,6 +11,8 @@ import subprocess
 import sys
 import tempfile
 from typing import Iterable
+from .config import parse_dotenv
+
 
 ROOT = Path(__file__).resolve().parents[2]
 PIN_FILE = ROOT / "versions.env"
@@ -118,10 +120,15 @@ def run_command(args: argparse.Namespace) -> tuple[list[str], str, bool]:
         command.extend(["--volume", f"{mount_source}:/workspace/artifacts"])
     else:
         command.extend(["--volume", f"{_value(None, 'REVIEW_ARTIFACT_VOLUME_NAME', 'reviewforge-artifacts')}:/workspace/artifacts"])
-    # Dedicated CRG graph-cache volume: keeps the persistent per-repo graph DBs
-    # off the artifact tree so artifact pruning never forces a cold rebuild.
-    command.extend(["--volume", f"{_value(None, 'REVIEW_CRG_CACHE_VOLUME_NAME', 'reviewforge-crg-cache')}:/workspace/crg-cache"])
-    command.extend(["-e", "CRG_CACHE_DIR=/workspace/crg-cache"])
+    # Dedicated CRG graph-cache volume. It is intentionally mounted for every
+    # run per the operator contract; CRG may be enabled later without changing
+    # container wiring. Respect a configured container cache path and mount the
+    # named volume at that same path.
+    dotenv = parse_dotenv(env_file)
+    cache_dir = os.environ.get("CRG_CACHE_DIR") or dotenv.get("CRG_CACHE_DIR") or "/workspace/crg-cache"
+    cache_volume = _value(None, "REVIEW_CRG_CACHE_VOLUME_NAME", "reviewforge-crg-cache")
+    command.extend(["--volume", f"{cache_volume}:{cache_dir}"])
+    command.extend(["-e", f"CRG_CACHE_DIR={cache_dir}"])
     command.extend(["--env-file", env_file])
     for key, value in overrides.items():
         if value:
