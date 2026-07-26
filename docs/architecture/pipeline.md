@@ -9,7 +9,7 @@ Pipelines declared in `pipeline/stages/__init__.py`:
 - `DEFAULT_PIPELINE`: `FetchPrMetadataStage` -> `PrepareRepositoryStage` -> `EnrichWithCrgStage` -> `ExecuteReasoningEngineStage` -> `ValidateAnchorsStage` -> `PostToAdoStage`.
 - `REVIEW_ONLY_PIPELINE`: the same sequence without posting.
 - `POST_ONLY_PIPELINE`: `FetchPrMetadataStage` -> `PostToAdoStage`.
-- `FAST_REVIEW_PIPELINE` and `FAST_REVIEW_REVIEW_ONLY_PIPELINE`: compatibility aliases for the corresponding current lists.
+- `FAST_REVIEW_PIPELINE` and `FAST_REVIEW_REVIEW_ONLY_PIPELINE`: compatibility entry points mirroring the corresponding current lists.
 
 `EnrichWithCrgStage` is always registered but self-skips unless `CRG_ENABLED` is set and the review mode is not `no_op`. It builds (or incrementally updates) a Tree-sitter knowledge graph of the checkout and writes `crg-analysis.json`; any failure degrades to a warning and the pipeline continues unchanged.
 

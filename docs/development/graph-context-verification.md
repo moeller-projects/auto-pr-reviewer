@@ -197,7 +197,7 @@ mapping decision, no code change.
 
 | # | Item | Verdict | Evidence |
 | --- | --- | --- | --- |
-| B1 | Stage exists, name, placed between Prepare and Execute in all four pipelines | CONFORMS (name DOCUMENTED: `enrich_with_crg`, not `collect_graph_context`) | `pipeline/stages/enrich_with_crg.py:44`; `pipeline/stages/__init__.py:32-74` (all four lists) |
+| B1 | Stage exists, name, placed between Prepare and Execute in all four engine pipelines | CONFORMS (name DOCUMENTED: `enrich_with_crg`, not `collect_graph_context`) | `pipeline/stages/enrich_with_crg.py:44`; `pipeline/stages/__init__.py:32-74` (all four engine pipeline lists; `POST_ONLY_PIPELINE` runs no engine) |
 | B2 | `should_run`: flag AND mode != no_op; flag off = byte-identical | FIXED (explicit `no_op` guard added; byte-identity proven by test) | `enrich_with_crg.py:54-60`; `tests/test_reasoning.py::TestCrgPromptInjection::test_absent_or_failed_analysis_is_byte_identical` |
 | B3 | Failure policy: warning, artifact `status: "failed"`, stage returns, never raises | FIXED (failure artifact was not written on build/analysis failure) | `enrich_with_crg.py:271-282`, `_write_failure_document` calls at `:116`, `:152`; tests `test_degrades_gracefully_*` |
 | B4 | `analyze_changes` with state files + repo_root; no churn; 500-cap → `degraded` | FIXED (`functions_truncated` was ignored; churn was already off) | `enrich_with_crg.py:144-149`, `:157`; test `test_degraded_status_when_functions_truncated` |
