@@ -12,39 +12,49 @@ forward it as structured context to the model. It is also written as
 ``crg-analysis.json`` in the run artifact directory.
 
 The graph DB is stored at
-``<review_artifact_root>/crg-cache/<repo_id>/crg.db`` and **persisted
-across runs**.  On the first run for a repository the full build is
-performed (~10 s per 500 files).  On subsequent runs an incremental
-update is applied (<2 s, SHA-256-based) when the ``code-review-graph``
-package exposes ``incremental_update``; the stage falls back to a full
-build if the symbol is absent or the incremental step raises.
+``<cache-root>/<repo_id>/crg-<tool_version>/crg.db`` and **persisted
+across runs**. The cache root defaults to
+``<review_artifact_root>/crg-cache`` (inside the artifact volume) and can
+be redirected with ``CRG_CACHE_DIR`` (e.g. a dedicated cache volume). The
+tool version is part of the path, so a CRG upgrade triggers exactly one
+cold rebuild instead of reusing an incompatible graph.
+
+On the first run for a repository (no DB file yet) a full build is
+performed (~10 s per 500 files). On subsequent runs an incremental update
+(<2 s, SHA-256-based) re-parses only the PR's changed files and their
+dependents; the changed-file list comes from the pipeline, not from a git
+base guess, so shallow checkouts cannot silently degrade the warm path.
+The stage falls back to a full build if ``incremental_update`` is absent
+or raises.
 
 This stage MUST NOT raise on any CRG failure. Any error degrades
-gracefully to today's behavior with a :func:`~reviewforge.runlog.warning`.
+gracefully to today's behavior: a warning is logged, ``crg-analysis.json``
+is written with ``status: "failed"``, and the pipeline continues.
 """
 from __future__ import annotations
 
 import json
 import re
+import time
+from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any
 
 from ...runlog import info as _log, warning as log_warning
 from ..stage import Stage, StageContext
 
+_CRG_DISTRIBUTION = "code-review-graph"
+
 
 class EnrichWithCrgStage(Stage):
-    """Build a Tree-sitter knowledge graph and analyse the PR diff.
-
-    Produces ``ctx.extras["crg_analysis"]`` — a dict with keys
-    ``summary``, ``risk_score``, ``changed_functions``, ``affected_flows``,
-    ``test_gaps``, and ``review_priorities`` — for downstream prompt injection.
-    """
+    """Build a Tree-sitter knowledge graph and analyse the PR diff."""
 
     name = "enrich_with_crg"
 
     def should_run(self, ctx: StageContext) -> bool:
         if not ctx.cfg.crg_enabled:
+            return False
+        if getattr(ctx.extras.get("review_state"), "mode", None) == "no_op":
             return False
         if ctx.state is None or not getattr(ctx.state, "repo_dir", None):
             return False
@@ -64,15 +74,31 @@ class EnrichWithCrgStage(Stage):
                 "CRG enrichment skipped: 'code-review-graph' package is not installed. "
                 "Install it with: pip install code-review-graph"
             )
+            _write_failure_document(ctx, tool_version=None, error="package unavailable")
             return {"crg_status": "package_unavailable"}
 
+        tool_version = _crg_version()
+        db_path = _crg_db_path(ctx, tool_version)
+        # Decide cold vs warm BEFORE constructing GraphStore: opening the
+        # SQLite database creates the file eagerly, so an existence check
+        # afterwards would always report "warm" and the cold full build
+        # would never run.
+        db_existed = db_path.exists()
+
+        build_mode = "full"
+        build_duration_ms = 0
+        node_count = 0
         try:
-            db_path = _crg_db_path(ctx)
             store = GraphStore(db_path)
             incremental_update = getattr(_crg_inc, "incremental_update", None)
-            if db_path.exists() and incremental_update is not None:
+            started = time.monotonic()
+            if db_existed and incremental_update is not None:
                 try:
-                    build_result = incremental_update(repo_dir, store)
+                    # Pass the PR's changed files explicitly. The package
+                    # default diffs against HEAD~1, which is unreliable in
+                    # our shallow, detached checkouts and silently re-parses
+                    # the wrong file set.
+                    build_result = incremental_update(repo_dir, store, changed_files=changed_files)
                     build_mode = "incremental"
                 except Exception as exc:  # noqa: BLE001
                     log_warning(
@@ -84,10 +110,16 @@ class EnrichWithCrgStage(Stage):
             else:
                 build_result = _crg_inc.full_build(repo_dir, store)
                 build_mode = "full"
-            node_count: int = build_result.get("nodes", 0) if isinstance(build_result, dict) else 0
+            build_duration_ms = int((time.monotonic() - started) * 1000)
+            node_count = (
+                build_result.get("nodes", build_result.get("total_nodes", 0))
+                if isinstance(build_result, dict)
+                else 0
+            )
             _log(f"CRG graph {build_mode} build: {node_count} nodes from {repo_dir}")
         except Exception as exc:  # noqa: BLE001
             log_warning(f"CRG graph build failed ({type(exc).__name__}: {exc}); skipping enrichment")
+            _write_failure_document(ctx, tool_version=tool_version, error=str(exc))
             return {"crg_status": "build_failed", "crg_error": str(exc)}
 
         try:
@@ -98,7 +130,7 @@ class EnrichWithCrgStage(Stage):
             if range_spec:
                 raw_ranges = parse_git_diff_ranges(root_str, range_spec)
                 # Remap relative keys to absolute paths for GraphStore lookups.
-                changed_ranges: dict[str, list[tuple[int, int]]] = {
+                changed_ranges: dict[str, list[tuple[int, int]]] | None = {
                     str(repo_dir / key): ranges
                     for key, ranges in raw_ranges.items()
                 }
@@ -117,38 +149,64 @@ class EnrichWithCrgStage(Stage):
             )
         except Exception as exc:  # noqa: BLE001
             log_warning(f"CRG analysis failed ({type(exc).__name__}: {exc}); skipping enrichment")
+            _write_failure_document(ctx, tool_version=tool_version, error=str(exc))
             return {"crg_status": "analysis_failed", "crg_error": str(exc)}
 
+        # The package caps changed_functions at 500 (CRG_MAX_CHANGED_FUNCS)
+        # and flags the truncation; surface it as a degraded status.
+        status = "degraded" if analysis.get("functions_truncated") else "ok"
+        document = _build_document(
+            analysis,
+            status=status,
+            tool_version=tool_version,
+            build={"mode": build_mode, "duration_ms": build_duration_ms},
+        )
+
         try:
-            _write_artifact(ctx, analysis)
+            _write_artifact(ctx, document)
         except Exception as exc:  # noqa: BLE001
             log_warning(f"CRG artifact write failed ({type(exc).__name__}: {exc}); continuing without artifact")
 
-        ctx.extras["crg_analysis"] = analysis
+        ctx.extras["crg_analysis"] = document
         _log(
-            f"CRG enrichment complete: risk_score={analysis.get('risk_score', 0):.2f}, "
-            f"changed_functions={len(analysis.get('changed_functions', []))}, "
-            f"test_gaps={len(analysis.get('test_gaps', []))}"
+            f"CRG enrichment complete: risk_score={document['risk_score']:.2f}, "
+            f"changed_functions={len(document['changed_functions'])}, "
+            f"test_gaps={len(document['test_gaps'])}"
         )
         return {
-            "crg_status": "ok",
+            "crg_status": status,
             "crg_build_mode": build_mode,
             "crg_nodes": node_count,
-            "crg_risk_score": analysis.get("risk_score", 0),
-            "crg_changed_functions": len(analysis.get("changed_functions", [])),
-            "crg_test_gaps": len(analysis.get("test_gaps", [])),
+            "crg_risk_score": document["risk_score"],
+            "crg_changed_functions": len(document["changed_functions"]),
+            "crg_test_gaps": len(document["test_gaps"]),
         }
 
 
-def _crg_db_path(ctx: StageContext) -> Path:
+def _crg_version() -> str:
+    """Return the installed ``code-review-graph`` version (``unknown`` fallback)."""
+    try:
+        return importlib_metadata.version(_CRG_DISTRIBUTION)
+    except importlib_metadata.PackageNotFoundError:
+        return "unknown"
+
+
+def _crg_db_path(ctx: StageContext, tool_version: str) -> Path:
     """Return the persistent per-repo SQLite path for the CRG graph.
 
-    Stored at ``<review_artifact_root>/crg-cache/<repo_id>/crg.db`` and
-    shared across all runs for the same repository.  The directory is
-    created eagerly so that ``GraphStore`` can open the file on first use.
+    Stored at ``<cache-root>/<repo_id>/crg-<tool_version>/crg.db`` and
+    shared across all runs for the same repository. The cache root is
+    ``CRG_CACHE_DIR`` when configured, otherwise
+    ``<review_artifact_root>/crg-cache`` — both live on persistent volumes,
+    never under the per-run artifact dir or the disposable repo checkout.
+    The tool version in the path guarantees a cold rebuild after a CRG
+    upgrade. The directory is created eagerly so that ``GraphStore`` can
+    open the file on first use.
     """
     repo_id = _safe_repo_id(ctx.cfg.ado_repo_id or "default")
-    cache_dir = ctx.cfg.review_artifact_root / "crg-cache" / repo_id
+    override = getattr(ctx.cfg, "crg_cache_dir", None)
+    root = Path(override) if override else ctx.cfg.review_artifact_root / "crg-cache"
+    cache_dir = root / repo_id / f"crg-{tool_version}"
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir / "crg.db"
 
@@ -159,10 +217,71 @@ def _safe_repo_id(repo_id: str) -> str:
     return sanitised or "default"
 
 
-def _write_artifact(ctx: StageContext, analysis: dict[str, Any]) -> None:
-    """Serialise ``analysis`` to the ``crg-analysis.json`` artifact."""
+def _impacted_files(analysis: dict[str, Any]) -> list[str]:
+    """Return the sorted unique file set touched by the analysis."""
+    files: set[str] = set()
+    for key in ("changed_functions", "review_priorities", "test_gaps"):
+        for item in analysis.get(key) or []:
+            path = item.get("file") if isinstance(item, dict) else None
+            if path:
+                files.add(str(path))
+    return sorted(files)
+
+
+def _base_document(tool_version: str | None) -> dict[str, Any]:
+    return {
+        "status": "failed",
+        "tool_version": tool_version,
+        "build": {"mode": "none", "duration_ms": 0},
+        "summary": "",
+        "risk_score": 0.0,
+        "changed_functions": [],
+        "affected_flows": [],
+        "test_gaps": [],
+        "impacted_files": [],
+        "review_priorities": [],
+    }
+
+
+def _build_document(
+    analysis: dict[str, Any],
+    *,
+    status: str,
+    tool_version: str,
+    build: dict[str, Any],
+) -> dict[str, Any]:
+    """Compose the canonical ``crg-analysis.json`` document."""
+    document = _base_document(tool_version)
+    document.update(
+        status=status,
+        build=build,
+        summary=analysis.get("summary", ""),
+        risk_score=analysis.get("risk_score", 0.0),
+        changed_functions=analysis.get("changed_functions", []),
+        affected_flows=analysis.get("affected_flows", []),
+        test_gaps=analysis.get("test_gaps", []),
+        impacted_files=_impacted_files(analysis),
+        review_priorities=analysis.get("review_priorities", []),
+    )
+    if analysis.get("functions_truncated"):
+        document["functions_truncated"] = True
+    return document
+
+
+def _write_failure_document(ctx: StageContext, *, tool_version: str | None, error: str) -> None:
+    """Best-effort ``status: "failed"`` artifact so operators can see the miss."""
+    document = _base_document(tool_version)
+    document["error"] = error
+    try:
+        _write_artifact(ctx, document)
+    except Exception as exc:  # noqa: BLE001
+        log_warning(f"CRG failure artifact write failed ({type(exc).__name__}: {exc})")
+
+
+def _write_artifact(ctx: StageContext, document: dict[str, Any]) -> None:
+    """Serialise ``document`` to the ``crg-analysis.json`` artifact."""
     ctx.artifacts.crg_analysis.write_text(
-        json.dumps(analysis, ensure_ascii=False, indent=2),
+        json.dumps(document, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 

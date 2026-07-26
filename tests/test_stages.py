@@ -1449,6 +1449,74 @@ class TestVerifyFindingsBatchedRegression:
 # ---------------------------------------------------------------------------
 
 
+class _FakeGraphStore:
+    """Stand-in for ``code_review_graph.graph.GraphStore``.
+
+    The real store opens the SQLite file (and creates it) in ``__init__``;
+    replicating that here is essential — it is exactly what broke cold/warm
+    detection when the stage checked ``db_path.exists()`` after construction.
+    """
+
+    def __init__(self, db_path):
+        self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.db_path.touch(exist_ok=True)
+
+
+def _fake_crg_analysis(**overrides):
+    doc = {
+        "summary": "Analyzed 1 file",
+        "risk_score": 0.42,
+        "changed_functions": [
+            {"name": "foo", "qualified_name": "src.foo", "file": "src/foo.py", "risk_score": 0.42}
+        ],
+        "affected_flows": [],
+        "test_gaps": [
+            {"name": "foo", "qualified_name": "src.foo", "file": "src/foo.py", "line_start": 1, "line_end": 5}
+        ],
+        "review_priorities": [],
+        "functions_truncated": False,
+    }
+    doc.update(overrides)
+    return doc
+
+
+def _install_fake_crg(
+    monkeypatch,
+    *,
+    version="1.0.0",
+    full_build=None,
+    incremental_update=None,
+    analyze_changes=None,
+):
+    """Install a fake ``code_review_graph`` package into ``sys.modules``."""
+    import types
+
+    import reviewforge.pipeline.stages.enrich_with_crg as stage_mod
+
+    pkg = types.ModuleType("code_review_graph")
+    graph = types.ModuleType("code_review_graph.graph")
+    graph.GraphStore = _FakeGraphStore
+    inc = types.ModuleType("code_review_graph.incremental")
+    inc.full_build = full_build or (lambda *a, **k: {"nodes": 3})
+    if incremental_update is not None:
+        inc.incremental_update = incremental_update
+    changes = types.ModuleType("code_review_graph.changes")
+    changes.analyze_changes = analyze_changes or (lambda *a, **k: _fake_crg_analysis())
+    changes.parse_git_diff_ranges = lambda *a, **k: {}
+    pkg.graph = graph
+    pkg.incremental = inc
+    pkg.changes = changes
+    for name, mod in {
+        "code_review_graph": pkg,
+        "code_review_graph.graph": graph,
+        "code_review_graph.incremental": inc,
+        "code_review_graph.changes": changes,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, mod)
+    monkeypatch.setattr(stage_mod, "_crg_version", lambda: version)
+
+
 class TestEnrichWithCrgStage:
     """Tests for :class:`~reviewforge.pipeline.stages.enrich_with_crg.EnrichWithCrgStage`."""
 
@@ -1460,8 +1528,11 @@ class TestEnrichWithCrgStage:
             diff_text="--- a/src/foo.py\n+++ b/src/foo.py\n@@ -1,1 +1,2 @@\n+# change\n",
         )
 
-    def _make_cfg_with_crg(self, cfg: Config) -> Config:
-        return replace(cfg, crg_enabled=True)
+    def _run_ctx(self, cfg, artifacts, state):
+        from reviewforge.pipeline.stages.enrich_with_crg import EnrichWithCrgStage
+
+        ctx = _stage_context(cfg, artifacts, MagicMock(), state=state)
+        return EnrichWithCrgStage()(ctx), ctx
 
     # --- should_run gate ---
 
@@ -1476,6 +1547,14 @@ class TestEnrichWithCrgStage:
         crg_cfg = replace(cfg, crg_enabled=True)
         ctx = _stage_context(crg_cfg, artifacts, MagicMock())
         ctx.state = None
+        stage = EnrichWithCrgStage()
+        assert stage.should_run(ctx) is False
+
+    def test_skips_when_review_mode_no_op(self, cfg, artifacts, tmp_path):
+        from reviewforge.pipeline.stages.enrich_with_crg import EnrichWithCrgStage
+        crg_cfg = replace(cfg, crg_enabled=True)
+        ctx = _stage_context(crg_cfg, artifacts, MagicMock(), state=self._make_state(tmp_path))
+        ctx.extras["review_state"] = SimpleNamespace(mode="no_op")
         stage = EnrichWithCrgStage()
         assert stage.should_run(ctx) is False
 
@@ -1512,156 +1591,203 @@ class TestEnrichWithCrgStage:
         assert result.details.get("crg_status") == "package_unavailable"
         # No extras written.
         assert "crg_analysis" not in ctx.extras
+        # Failure artifact present for operators.
+        written = json.loads(artifacts.crg_analysis.read_text())
+        assert written["status"] == "failed"
+        assert "unavailable" in written["error"]
 
     # --- graceful-degradation: build failure ---
 
     def test_degrades_gracefully_on_build_failure(self, cfg, artifacts, tmp_path, monkeypatch):
-        try:
-            import code_review_graph.incremental as _inc
-        except ImportError:
-            pytest.skip("code-review-graph not installed")
-
-        from reviewforge.pipeline.stages.enrich_with_crg import EnrichWithCrgStage
-
+        _install_fake_crg(
+            monkeypatch,
+            full_build=MagicMock(side_effect=RuntimeError("simulated graph build error")),
+        )
         crg_cfg = replace(cfg, crg_enabled=True)
-        ctx = _stage_context(crg_cfg, artifacts, MagicMock(), state=self._make_state(tmp_path))
-
-        def _boom(*a, **k):
-            raise RuntimeError("simulated graph build error")
-
-        monkeypatch.setattr(_inc, "full_build", _boom)
-
-        result = EnrichWithCrgStage()(ctx)
+        result, ctx = self._run_ctx(crg_cfg, artifacts, self._make_state(tmp_path))
 
         assert result.status == StageStatus.OK
         assert result.details.get("crg_status") == "build_failed"
         assert "crg_analysis" not in ctx.extras
+        written = json.loads(artifacts.crg_analysis.read_text())
+        assert written["status"] == "failed"
+        assert "simulated graph build error" in written["error"]
+        assert written["tool_version"] == "1.0.0"
 
     # --- graceful-degradation: analysis failure ---
 
     def test_degrades_gracefully_on_analysis_failure(self, cfg, artifacts, tmp_path, monkeypatch):
-        try:
-            import code_review_graph.changes as _ch
-            import code_review_graph.incremental as _inc
-        except ImportError:
-            pytest.skip("code-review-graph not installed")
-
-        from reviewforge.pipeline.stages.enrich_with_crg import EnrichWithCrgStage
-
+        _install_fake_crg(
+            monkeypatch,
+            analyze_changes=MagicMock(side_effect=RuntimeError("analysis boom")),
+        )
         crg_cfg = replace(cfg, crg_enabled=True)
-        ctx = _stage_context(crg_cfg, artifacts, MagicMock(), state=self._make_state(tmp_path))
-
-        monkeypatch.setattr(_inc, "full_build", lambda *a, **k: {"nodes": 5})
-        monkeypatch.setattr(_ch, "parse_git_diff_ranges", lambda *a, **k: {})
-
-        def _boom_analysis(*a, **k):
-            raise RuntimeError("analysis boom")
-
-        monkeypatch.setattr(_ch, "analyze_changes", _boom_analysis)
-
-        result = EnrichWithCrgStage()(ctx)
+        result, ctx = self._run_ctx(crg_cfg, artifacts, self._make_state(tmp_path))
 
         assert result.status == StageStatus.OK
         assert result.details.get("crg_status") == "analysis_failed"
         assert "crg_analysis" not in ctx.extras
+        written = json.loads(artifacts.crg_analysis.read_text())
+        assert written["status"] == "failed"
+        assert "analysis boom" in written["error"]
 
-    # --- happy path ---
+    # --- happy path + artifact contract ---
 
-    def test_happy_path_stores_analysis_in_extras_and_artifact(self, cfg, artifacts, tmp_path, monkeypatch):
-        try:
-            import code_review_graph.changes as _ch
-            import code_review_graph.incremental as _inc
-        except ImportError:
-            pytest.skip("code-review-graph not installed")
-
-        from reviewforge.pipeline.stages.enrich_with_crg import EnrichWithCrgStage
-
+    def test_happy_path_stores_document_in_extras_and_artifact(self, cfg, artifacts, tmp_path, monkeypatch):
+        _install_fake_crg(monkeypatch)
         crg_cfg = replace(cfg, crg_enabled=True)
-        ctx = _stage_context(crg_cfg, artifacts, MagicMock(), state=self._make_state(tmp_path))
-
-        fake_analysis = {
-            "summary": "Analyzed 1 file",
-            "risk_score": 0.42,
-            "changed_functions": [{"name": "foo", "qualified_name": "src.foo", "risk_score": 0.42}],
-            "affected_flows": [],
-            "test_gaps": [{"name": "foo", "qualified_name": "src.foo", "file": "src/foo.py", "line_start": 1, "line_end": 5}],
-            "review_priorities": [],
-            "functions_truncated": False,
-        }
-
-        monkeypatch.setattr(_inc, "full_build", lambda *a, **k: {"nodes": 10})
-        monkeypatch.setattr(_ch, "analyze_changes", lambda *a, **k: fake_analysis)
-        monkeypatch.setattr(_ch, "parse_git_diff_ranges", lambda *a, **k: {})
-
-        result = EnrichWithCrgStage()(ctx)
+        result, ctx = self._run_ctx(crg_cfg, artifacts, self._make_state(tmp_path))
 
         assert result.status == StageStatus.OK
         assert result.details["crg_status"] == "ok"
         assert result.details["crg_build_mode"] == "full"
         assert result.details["crg_risk_score"] == 0.42
         assert result.details["crg_test_gaps"] == 1
-        assert ctx.extras["crg_analysis"] is fake_analysis
-        # Artifact written.
-        assert artifacts.crg_analysis.exists()
+        document = ctx.extras["crg_analysis"]
+        assert document["status"] == "ok"
+        assert document["tool_version"] == "1.0.0"
+        assert document["build"]["mode"] == "full"
+        assert document["risk_score"] == 0.42
+        # Artifact mirrors the extras document.
         written = json.loads(artifacts.crg_analysis.read_text())
-        assert written["risk_score"] == 0.42
-        # DB placed in the persistent per-repo cache directory, not under raw/.
-        expected_db = crg_cfg.review_artifact_root / "crg-cache" / "api" / "crg.db"
-        assert expected_db.parent.exists()
+        assert written == document
+        # DB placed in the persistent per-repo, version-keyed cache directory.
+        expected_db = crg_cfg.review_artifact_root / "crg-cache" / "api" / "crg-1.0.0" / "crg.db"
+        assert expected_db.exists()
+
+    def test_artifact_shape_contract(self, cfg, artifacts, tmp_path, monkeypatch):
+        """crg-analysis.json must expose the canonical key set."""
+        _install_fake_crg(
+            monkeypatch,
+            analyze_changes=lambda *a, **k: _fake_crg_analysis(
+                changed_functions=[
+                    {"name": "b", "qualified_name": "src.b", "file": "src/b.py", "risk_score": 0.1},
+                    {"name": "a", "qualified_name": "src.a", "file": "src/a.py", "risk_score": 0.9},
+                ],
+                review_priorities=[
+                    {"name": "a", "qualified_name": "src.a", "file": "src/a.py", "risk_score": 0.9}
+                ],
+            ),
+        )
+        crg_cfg = replace(cfg, crg_enabled=True)
+        result, ctx = self._run_ctx(crg_cfg, artifacts, self._make_state(tmp_path))
+        assert result.status == StageStatus.OK
+
+        written = json.loads(artifacts.crg_analysis.read_text())
+        assert set(written) == {
+            "status",
+            "tool_version",
+            "build",
+            "summary",
+            "risk_score",
+            "changed_functions",
+            "affected_flows",
+            "test_gaps",
+            "impacted_files",
+            "review_priorities",
+        }
+        assert set(written["build"]) == {"mode", "duration_ms"}
+        # impacted_files: sorted union of files from functions/priorities/gaps.
+        assert written["impacted_files"] == ["src/a.py", "src/b.py", "src/foo.py"]
+
+    def test_degraded_status_when_functions_truncated(self, cfg, artifacts, tmp_path, monkeypatch):
+        _install_fake_crg(
+            monkeypatch,
+            analyze_changes=lambda *a, **k: _fake_crg_analysis(functions_truncated=True),
+        )
+        crg_cfg = replace(cfg, crg_enabled=True)
+        result, ctx = self._run_ctx(crg_cfg, artifacts, self._make_state(tmp_path))
+
+        assert result.status == StageStatus.OK
+        assert result.details["crg_status"] == "degraded"
+        written = json.loads(artifacts.crg_analysis.read_text())
+        assert written["status"] == "degraded"
+        assert written["functions_truncated"] is True
+
+    def test_determinism_identical_inputs_identical_artifact(self, cfg, artifacts, tmp_path, monkeypatch):
+        """Identical inputs produce identical artifacts modulo build duration."""
+        _install_fake_crg(monkeypatch)
+        crg_cfg = replace(cfg, crg_enabled=True)
+        result1, _ = self._run_ctx(crg_cfg, artifacts, self._make_state(tmp_path))
+        assert result1.status == StageStatus.OK
+        first = json.loads(artifacts.crg_analysis.read_text())
+
+        artifacts2 = manager.create(replace(crg_cfg, review_run_id="run-2"))
+        result2, _ = self._run_ctx(crg_cfg, artifacts2, self._make_state(tmp_path))
+        assert result2.status == StageStatus.OK
+        second = json.loads(artifacts2.crg_analysis.read_text())
+
+        first["build"].pop("duration_ms")
+        second["build"].pop("duration_ms")
+        assert first == second
 
     # --- graph cache persistence ---
 
-    def test_first_run_uses_full_build(self, cfg, artifacts, tmp_path, monkeypatch):
-        """When no cached DB exists the stage must call full_build."""
-        try:
-            import code_review_graph.changes as _ch
-            import code_review_graph.incremental as _inc
-        except ImportError:
-            pytest.skip("code-review-graph not installed")
-
-        from reviewforge.pipeline.stages.enrich_with_crg import EnrichWithCrgStage
-
-        crg_cfg = replace(cfg, crg_enabled=True)
-        ctx = _stage_context(crg_cfg, artifacts, MagicMock(), state=self._make_state(tmp_path))
-
+    def test_first_run_uses_full_build_despite_eager_db_creation(self, cfg, artifacts, tmp_path, monkeypatch):
+        """GraphStore creates the DB file on open; the cold/warm decision must
+        be made before that, or the very first run wrongly takes the warm path."""
         calls: list[str] = []
 
         def _full(*a, **k):
             calls.append("full")
             return {"nodes": 3}
 
-        def _inc_update(*a, **k):
+        def _inc(*a, **k):
             calls.append("inc")
             return {"nodes": 3}
 
-        monkeypatch.setattr(_inc, "full_build", _full)
-        monkeypatch.setattr(_inc, "incremental_update", _inc_update, raising=False)
-        monkeypatch.setattr(_ch, "analyze_changes", lambda *a, **k: {"risk_score": 0.0, "changed_functions": [], "affected_flows": [], "test_gaps": [], "review_priorities": []})
-        monkeypatch.setattr(_ch, "parse_git_diff_ranges", lambda *a, **k: {})
-
-        result = EnrichWithCrgStage()(ctx)
+        _install_fake_crg(monkeypatch, full_build=_full, incremental_update=_inc)
+        crg_cfg = replace(cfg, crg_enabled=True)
+        result, _ = self._run_ctx(crg_cfg, artifacts, self._make_state(tmp_path))
 
         assert result.status == StageStatus.OK
         assert result.details["crg_build_mode"] == "full"
         assert calls == ["full"]
 
-    def test_subsequent_run_uses_incremental_update(self, cfg, artifacts, tmp_path, monkeypatch):
-        """When a cached DB already exists the stage must call incremental_update."""
-        try:
-            import code_review_graph.changes as _ch
-            import code_review_graph.incremental as _inc
-        except ImportError:
-            pytest.skip("code-review-graph not installed")
+    def test_two_consecutive_runs_cold_then_warm(self, cfg, artifacts, tmp_path, monkeypatch):
+        """Acceptance: run 1 builds cold, run 2 updates warm; full_build once."""
+        calls: list[tuple[str, dict[str, Any]]] = []
 
-        from reviewforge.pipeline.stages.enrich_with_crg import EnrichWithCrgStage
+        def _full(*a, **k):
+            calls.append(("full", k))
+            return {"nodes": 3}
 
+        def _inc(*a, **k):
+            calls.append(("inc", k))
+            return {"nodes": 3}
+
+        _install_fake_crg(monkeypatch, full_build=_full, incremental_update=_inc)
         crg_cfg = replace(cfg, crg_enabled=True)
-        ctx = _stage_context(crg_cfg, artifacts, MagicMock(), state=self._make_state(tmp_path))
 
-        # Pre-create the persistent DB file to simulate a previous run.
-        db_path = crg_cfg.review_artifact_root / "crg-cache" / "api" / "crg.db"
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        db_path.touch()
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        result1, _ = self._run_ctx(crg_cfg, artifacts, self._make_state(repo_dir))
+        assert result1.details["crg_build_mode"] == "full"
+
+        artifacts2 = manager.create(replace(crg_cfg, review_run_id="run-2"))
+        result2, _ = self._run_ctx(crg_cfg, artifacts2, self._make_state(repo_dir))
+        assert result2.details["crg_build_mode"] == "incremental"
+
+        assert [kind for kind, _ in calls] == ["full", "inc"]
+        # The warm path receives the PR's changed files, never a git-base guess.
+        assert calls[1][1]["changed_files"] == ["src/foo.py"]
+
+        # The cache DB lives outside both the repo checkout and the per-run
+        # artifact dirs, and survives their deletion.
+        db_path = crg_cfg.review_artifact_root / "crg-cache" / "api" / "crg-1.0.0" / "crg.db"
+        assert db_path.exists()
+        assert not db_path.is_relative_to(repo_dir)
+        assert not db_path.is_relative_to(artifacts.dir)
+        assert not db_path.is_relative_to(artifacts2.dir)
+        shutil.rmtree(repo_dir)
+        shutil.rmtree(artifacts.dir)
+        shutil.rmtree(artifacts2.dir)
+        assert db_path.exists()
+
+    def test_version_bump_triggers_exactly_one_cold_rebuild(self, cfg, artifacts, tmp_path, monkeypatch):
+        """Bumping the CRG version keys a fresh cache dir: one cold rebuild,
+        then warm again."""
+        import reviewforge.pipeline.stages.enrich_with_crg as stage_mod
 
         calls: list[str] = []
 
@@ -1669,39 +1795,32 @@ class TestEnrichWithCrgStage:
             calls.append("full")
             return {"nodes": 3}
 
-        def _inc_update(*a, **k):
+        def _inc(*a, **k):
             calls.append("inc")
             return {"nodes": 3}
 
-        monkeypatch.setattr(_inc, "full_build", _full)
-        monkeypatch.setattr(_inc, "incremental_update", _inc_update, raising=False)
-        monkeypatch.setattr(_ch, "analyze_changes", lambda *a, **k: {"risk_score": 0.0, "changed_functions": [], "affected_flows": [], "test_gaps": [], "review_priorities": []})
-        monkeypatch.setattr(_ch, "parse_git_diff_ranges", lambda *a, **k: {})
+        _install_fake_crg(monkeypatch, version="1.0.0", full_build=_full, incremental_update=_inc)
+        crg_cfg = replace(cfg, crg_enabled=True)
 
-        result = EnrichWithCrgStage()(ctx)
+        result1, _ = self._run_ctx(crg_cfg, artifacts, self._make_state(tmp_path))
+        assert result1.details["crg_build_mode"] == "full"
+        artifacts2 = manager.create(replace(crg_cfg, review_run_id="run-2"))
+        result2, _ = self._run_ctx(crg_cfg, artifacts2, self._make_state(tmp_path))
+        assert result2.details["crg_build_mode"] == "incremental"
 
-        assert result.status == StageStatus.OK
-        assert result.details["crg_build_mode"] == "incremental"
-        assert calls == ["inc"]
+        # Simulate a CRG upgrade.
+        monkeypatch.setattr(stage_mod, "_crg_version", lambda: "2.0.0")
+        artifacts3 = manager.create(replace(crg_cfg, review_run_id="run-3"))
+        result3, _ = self._run_ctx(crg_cfg, artifacts3, self._make_state(tmp_path))
+        assert result3.details["crg_build_mode"] == "full"
+        artifacts4 = manager.create(replace(crg_cfg, review_run_id="run-4"))
+        result4, _ = self._run_ctx(crg_cfg, artifacts4, self._make_state(tmp_path))
+        assert result4.details["crg_build_mode"] == "incremental"
+
+        assert calls == ["full", "inc", "full", "inc"]
 
     def test_falls_back_to_full_build_when_incremental_update_fails(self, cfg, artifacts, tmp_path, monkeypatch):
         """When incremental_update raises the stage must fall back to full_build."""
-        try:
-            import code_review_graph.changes as _ch
-            import code_review_graph.incremental as _inc
-        except ImportError:
-            pytest.skip("code-review-graph not installed")
-
-        from reviewforge.pipeline.stages.enrich_with_crg import EnrichWithCrgStage
-
-        crg_cfg = replace(cfg, crg_enabled=True)
-        ctx = _stage_context(crg_cfg, artifacts, MagicMock(), state=self._make_state(tmp_path))
-
-        # Pre-create the persistent DB file to simulate a previous run.
-        db_path = crg_cfg.review_artifact_root / "crg-cache" / "api" / "crg.db"
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        db_path.touch()
-
         calls: list[str] = []
 
         def _full(*a, **k):
@@ -1712,14 +1831,104 @@ class TestEnrichWithCrgStage:
             calls.append("inc_failed")
             raise RuntimeError("simulated incremental failure")
 
-        monkeypatch.setattr(_inc, "full_build", _full)
-        monkeypatch.setattr(_inc, "incremental_update", _boom_inc, raising=False)
-        monkeypatch.setattr(_ch, "analyze_changes", lambda *a, **k: {"risk_score": 0.0, "changed_functions": [], "affected_flows": [], "test_gaps": [], "review_priorities": []})
-        monkeypatch.setattr(_ch, "parse_git_diff_ranges", lambda *a, **k: {})
+        _install_fake_crg(monkeypatch, full_build=_full, incremental_update=_boom_inc)
+        crg_cfg = replace(cfg, crg_enabled=True)
 
-        result = EnrichWithCrgStage()(ctx)
+        # First run creates the cache; second run takes the warm path and fails over.
+        result1, _ = self._run_ctx(crg_cfg, artifacts, self._make_state(tmp_path))
+        assert result1.details["crg_build_mode"] == "full"
+        artifacts2 = manager.create(replace(crg_cfg, review_run_id="run-2"))
+        result2, _ = self._run_ctx(crg_cfg, artifacts2, self._make_state(tmp_path))
+
+        assert result2.status == StageStatus.OK
+        assert result2.details["crg_build_mode"] == "full"
+        assert calls == ["full", "inc_failed", "full"]
+
+    def test_full_build_when_incremental_symbol_missing(self, cfg, artifacts, tmp_path, monkeypatch):
+        """A CRG build without incremental_update always performs a full build."""
+        calls: list[str] = []
+
+        def _full(*a, **k):
+            calls.append("full")
+            return {"nodes": 3}
+
+        _install_fake_crg(monkeypatch, full_build=_full, incremental_update=None)
+        crg_cfg = replace(cfg, crg_enabled=True)
+
+        result1, _ = self._run_ctx(crg_cfg, artifacts, self._make_state(tmp_path))
+        artifacts2 = manager.create(replace(crg_cfg, review_run_id="run-2"))
+        result2, _ = self._run_ctx(crg_cfg, artifacts2, self._make_state(tmp_path))
+
+        assert result1.details["crg_build_mode"] == "full"
+        assert result2.details["crg_build_mode"] == "full"
+        assert calls == ["full", "full"]
+
+    def test_cache_dir_override_redirects_cache(self, cfg, artifacts, tmp_path, monkeypatch):
+        """CRG_CACHE_DIR moves the persistent cache off the artifact tree."""
+        _install_fake_crg(monkeypatch)
+        cache_root = tmp_path / "crg-volume"
+        crg_cfg = replace(cfg, crg_enabled=True, crg_cache_dir=cache_root)
+        result, _ = self._run_ctx(crg_cfg, artifacts, self._make_state(tmp_path))
 
         assert result.status == StageStatus.OK
-        assert result.details["crg_build_mode"] == "full"
-        assert calls == ["inc_failed", "full"]
+        assert (cache_root / "api" / "crg-1.0.0" / "crg.db").exists()
+        assert not (crg_cfg.review_artifact_root / "crg-cache").exists()
 
+    def test_empty_range_spec_passes_none_changed_ranges(self, cfg, artifacts, tmp_path, monkeypatch):
+        captured: dict[str, Any] = {}
+
+        def _analyze(store, files, *, changed_ranges, repo_root):
+            captured["changed_ranges"] = changed_ranges
+            return _fake_crg_analysis()
+
+        _install_fake_crg(monkeypatch, analyze_changes=_analyze)
+        crg_cfg = replace(cfg, crg_enabled=True)
+        state = self._make_state(tmp_path)
+        state.range_spec = ""
+        state.files = [str(tmp_path / "abs.py")]  # absolute paths pass through
+        result, _ = self._run_ctx(crg_cfg, artifacts, state)
+
+        assert result.status == StageStatus.OK
+        assert captured["changed_ranges"] is None
+
+    def test_artifact_write_failure_still_exposes_extras(self, cfg, artifacts, tmp_path, monkeypatch):
+        import reviewforge.pipeline.stages.enrich_with_crg as stage_mod
+
+        _install_fake_crg(monkeypatch)
+        monkeypatch.setattr(
+            stage_mod, "_write_artifact", MagicMock(side_effect=OSError("disk full"))
+        )
+        crg_cfg = replace(cfg, crg_enabled=True)
+        result, ctx = self._run_ctx(crg_cfg, artifacts, self._make_state(tmp_path))
+
+        assert result.status == StageStatus.OK
+        assert result.details["crg_status"] == "ok"
+        assert ctx.extras["crg_analysis"]["status"] == "ok"
+
+    def test_failure_artifact_write_failure_is_swallowed(self, cfg, artifacts, tmp_path, monkeypatch):
+        import reviewforge.pipeline.stages.enrich_with_crg as stage_mod
+
+        _install_fake_crg(
+            monkeypatch,
+            full_build=MagicMock(side_effect=RuntimeError("boom")),
+        )
+        monkeypatch.setattr(
+            stage_mod, "_write_artifact", MagicMock(side_effect=OSError("disk full"))
+        )
+        crg_cfg = replace(cfg, crg_enabled=True)
+        result, _ = self._run_ctx(crg_cfg, artifacts, self._make_state(tmp_path))
+
+        assert result.status == StageStatus.OK
+        assert result.details["crg_status"] == "build_failed"
+
+    def test_crg_version_fallback_when_distribution_missing(self, monkeypatch):
+        from importlib import metadata as importlib_metadata
+
+        import reviewforge.pipeline.stages.enrich_with_crg as stage_mod
+
+        monkeypatch.setattr(
+            importlib_metadata,
+            "version",
+            MagicMock(side_effect=importlib_metadata.PackageNotFoundError("nope")),
+        )
+        assert stage_mod._crg_version() == "unknown"
