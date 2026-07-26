@@ -10,4 +10,6 @@ Session reuse is enabled by default for the Pi backend. The default identifier i
 
 Prompts are files, not embedded Python templates. Runtime augmentation adds language and standards where applicable. See [prompt reference](../reference/prompts.md) and [prompt development](../guides/prompt-development.md).
 
+When `CRG_ENABLED` is set, `EnrichWithCrgStage` prepends a deterministic "Deterministic graph context" section to the single-pi user message (before the diff). The section is produced Python-side by the `code-review-graph` package — no model call, no MCP server, no extra Pi tools — and is capped, ordered, and omitted entirely when analysis fails, so failed runs produce byte-identical prompts to disabled runs.
+
 The model response is parsed and validated against Pydantic schemas. Invalid output is not silently coerced into a valid finding; schema errors are surfaced through the domain error path.

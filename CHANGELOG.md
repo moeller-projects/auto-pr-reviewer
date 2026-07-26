@@ -18,9 +18,12 @@ All notable changes to this project will be documented in this file.
 - PowerShell operations wrappers are deprecated compatibility entrypoints; use `python -m reviewforge.ops` for cross-platform container build and review commands.
 - ADO pipeline fetch and post operations now execute in-process through `ado.operations`; `reviewforge.ado.cli` remains a legacy compatibility shim.
 - Follow-up reviews now curate deterministic human feedback from prior bot threads and suppress dismissed re-raises while preserving explicit regressions.
+- Optional CRG context enrichment (`CRG_ENABLED=1`): a `code-review-graph` Tree-sitter stage between repository preparation and reasoning injects deterministic change-impact analysis (changed functions, blast radius, test gaps, risk scores) into the single-pi prompt and persists it as `crg-analysis.json`. New knobs: `CRG_CACHE_DIR` (persistent graph-cache root, container default `/workspace/crg-cache` on the `reviewforge-crg-cache` volume) and `CRG_CONTEXT_MAX_BYTES` (prompt block cap, default 8192).
 
 ### Fixed
 
+- CRG graph cache now persists across runs: the cold/warm decision is made before the graph store eagerly creates the SQLite file, warm updates receive the PR's changed files instead of an unreliable `HEAD~1` guess, the cache path is keyed by the pinned CRG tool version, and the container image actually ships `code-review-graph` (locked in `uv.lock`, installed via `uv export --extra crg`) with a dedicated `reviewforge-crg-cache` volume mounted at `/workspace/crg-cache`.
+- CRG failures now write `crg-analysis.json` with `status: "failed"`, and truncated analyses surface as `status: "degraded"`.
 - Chunked `single_pi` reviews now make one in-session synthesis call for model-written whole-PR summaries while preserving programmatic finding/uncertainty merging. If synthesis fails validation or execution, deterministic boilerplate remains a safe fallback and is recorded as `synthesisFallback`.
 - Shallow merge-base resolution now checks repository state before escalating to guarded `--unshallow` fetches and reports every attempted depth when no merge base exists.
 - Added tracked-path convention checks, focused boundary/error coverage, and raised the CI coverage gate to 97%.
