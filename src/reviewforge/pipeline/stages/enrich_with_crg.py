@@ -58,7 +58,6 @@ class EnrichWithCrgStage(Stage):
         try:
             from code_review_graph.graph import GraphStore
             import code_review_graph.incremental as _crg_inc
-            from code_review_graph.incremental import full_build
             from code_review_graph.changes import analyze_changes, parse_git_diff_ranges
         except ImportError:
             log_warning(
@@ -80,10 +79,10 @@ class EnrichWithCrgStage(Stage):
                         f"CRG incremental update failed ({type(exc).__name__}: {exc}); "
                         "falling back to full build"
                     )
-                    build_result = full_build(repo_dir, store)
+                    build_result = _crg_inc.full_build(repo_dir, store)
                     build_mode = "full"
             else:
-                build_result = full_build(repo_dir, store)
+                build_result = _crg_inc.full_build(repo_dir, store)
                 build_mode = "full"
             node_count: int = build_result.get("nodes", 0) if isinstance(build_result, dict) else 0
             _log(f"CRG graph {build_mode} build: {node_count} nodes from {repo_dir}")

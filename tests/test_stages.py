@@ -1625,8 +1625,17 @@ class TestEnrichWithCrgStage:
         ctx = _stage_context(crg_cfg, artifacts, MagicMock(), state=self._make_state(tmp_path))
 
         calls: list[str] = []
-        monkeypatch.setattr(_inc, "full_build", lambda *a, **k: (calls.append("full"), {"nodes": 3})[1])
-        monkeypatch.setattr(_inc, "incremental_update", lambda *a, **k: (calls.append("inc"), {"nodes": 3})[1], raising=False)
+
+        def _full(*a, **k):
+            calls.append("full")
+            return {"nodes": 3}
+
+        def _inc_update(*a, **k):
+            calls.append("inc")
+            return {"nodes": 3}
+
+        monkeypatch.setattr(_inc, "full_build", _full)
+        monkeypatch.setattr(_inc, "incremental_update", _inc_update, raising=False)
         monkeypatch.setattr(_ch, "analyze_changes", lambda *a, **k: {"risk_score": 0.0, "changed_functions": [], "affected_flows": [], "test_gaps": [], "review_priorities": []})
         monkeypatch.setattr(_ch, "parse_git_diff_ranges", lambda *a, **k: {})
 
@@ -1655,8 +1664,17 @@ class TestEnrichWithCrgStage:
         db_path.touch()
 
         calls: list[str] = []
-        monkeypatch.setattr(_inc, "full_build", lambda *a, **k: (calls.append("full"), {"nodes": 3})[1])
-        monkeypatch.setattr(_inc, "incremental_update", lambda *a, **k: (calls.append("inc"), {"nodes": 3})[1], raising=False)
+
+        def _full(*a, **k):
+            calls.append("full")
+            return {"nodes": 3}
+
+        def _inc_update(*a, **k):
+            calls.append("inc")
+            return {"nodes": 3}
+
+        monkeypatch.setattr(_inc, "full_build", _full)
+        monkeypatch.setattr(_inc, "incremental_update", _inc_update, raising=False)
         monkeypatch.setattr(_ch, "analyze_changes", lambda *a, **k: {"risk_score": 0.0, "changed_functions": [], "affected_flows": [], "test_gaps": [], "review_priorities": []})
         monkeypatch.setattr(_ch, "parse_git_diff_ranges", lambda *a, **k: {})
 
@@ -1685,12 +1703,16 @@ class TestEnrichWithCrgStage:
         db_path.touch()
 
         calls: list[str] = []
-        monkeypatch.setattr(_inc, "full_build", lambda *a, **k: (calls.append("full"), {"nodes": 3})[1])
+
+        def _full(*a, **k):
+            calls.append("full")
+            return {"nodes": 3}
 
         def _boom_inc(*a, **k):
             calls.append("inc_failed")
             raise RuntimeError("simulated incremental failure")
 
+        monkeypatch.setattr(_inc, "full_build", _full)
         monkeypatch.setattr(_inc, "incremental_update", _boom_inc, raising=False)
         monkeypatch.setattr(_ch, "analyze_changes", lambda *a, **k: {"risk_score": 0.0, "changed_functions": [], "affected_flows": [], "test_gaps": [], "review_priorities": []})
         monkeypatch.setattr(_ch, "parse_git_diff_ranges", lambda *a, **k: {})
