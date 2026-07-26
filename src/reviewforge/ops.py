@@ -118,6 +118,10 @@ def run_command(args: argparse.Namespace) -> tuple[list[str], str, bool]:
         command.extend(["--volume", f"{mount_source}:/workspace/artifacts"])
     else:
         command.extend(["--volume", f"{_value(None, 'REVIEW_ARTIFACT_VOLUME_NAME', 'reviewforge-artifacts')}:/workspace/artifacts"])
+    # Dedicated CRG graph-cache volume: keeps the persistent per-repo graph DBs
+    # off the artifact tree so artifact pruning never forces a cold rebuild.
+    command.extend(["--volume", f"{_value(None, 'REVIEW_CRG_CACHE_VOLUME_NAME', 'reviewforge-crg-cache')}:/workspace/crg-cache"])
+    command.extend(["-e", "CRG_CACHE_DIR=/workspace/crg-cache"])
     command.extend(["--env-file", env_file])
     for key, value in overrides.items():
         if value:
