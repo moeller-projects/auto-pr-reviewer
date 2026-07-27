@@ -1,0 +1,6 @@
+- [x] Add independent graph feature flags and graph-context artifact.
+- [x] Implement base snapshot caching and API-surface diff context.
+- [x] Implement flow and architecture context with degradation.
+- [x] Inject deterministic wave-two sections into single_pi.
+- [ ] Add dedicated stubbed wave-two tests and run full suite.
+- [ ] Update repository documentation and changelog.

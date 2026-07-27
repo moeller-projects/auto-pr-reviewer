@@ -127,6 +127,20 @@ class TestCrgConfig:
         assert cfg.crg_cache_dir == tmp_path / "crg-vol"
         assert cfg.crg_context_max_bytes == 4096
 
+    def test_from_env_resolves_graph_wave_two_vars(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "tok")
+        monkeypatch.setenv("WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("CLONE_ROOT", str(tmp_path))
+        monkeypatch.setenv("GRAPH_API_DIFF", "1")
+        monkeypatch.setenv("GRAPH_FLOWS", "yes")
+        monkeypatch.setenv("GRAPH_ARCH", "on")
+        monkeypatch.setenv("GRAPH_CONTEXT_MAX_BYTES", "4096")
+        cfg = Config.from_env()
+        assert cfg.graph_api_diff is True
+        assert cfg.graph_flows is True
+        assert cfg.graph_arch is True
+        assert cfg.graph_context_max_bytes == 4096
+
     def test_from_sources_resolves_crg_vars(self, tmp_path):
         cfg = Config.from_sources(
             env={

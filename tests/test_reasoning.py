@@ -1037,6 +1037,32 @@ class TestCrgPromptInjection:
         doc = self._crg_document(summary="é" * 500)
         text = _format_crg_context(doc, 255)
         assert len(text.encode("utf-8")) <= 255
+    def test_wave2_context_drops_malformed_entries_and_respects_cap(self):
+        from reviewforge.reasoning.single_pi import _format_wave2_context
+
+        context = {
+            "api_surface": {
+                "status": "ok",
+                "breaking_candidates": ["bad", {"symbol": "pkg.api", "caller_count": 2}],
+                "added_nodes": ["pkg.added"],
+                "removed_nodes": ["pkg.removed"],
+            },
+            "flows": {
+                "top": [
+                    {"entry_point": "bad", "criticality": "not-a-number"},
+                    {"entry_point": "handler", "criticality": 0.75},
+                ]
+            },
+            "architecture": {
+                "hubs_touched": ["bad", {"qualified_name": "pkg.hub"}],
+                "bridges_touched": [None, {"qualified_name": "pkg.bridge"}],
+                "communities_crossed": 1,
+            },
+        }
+        text = _format_wave2_context(context, 256)
+        assert "pkg.api" in text or "handler" in text or "pkg.hub" in text
+        assert len(text.encode("utf-8")) <= 256
+
 
     def test_cfg_byte_cap_flows_into_prefix(self, tmp_path):
         from dataclasses import replace as _replace

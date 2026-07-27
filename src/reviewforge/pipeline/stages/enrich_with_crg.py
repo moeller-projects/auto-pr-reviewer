@@ -154,8 +154,6 @@ class EnrichWithCrgStage(Stage):
             _write_failure_document(ctx, tool_version=tool_version, error=str(exc))
             return {"crg_status": "analysis_failed", "crg_error": str(exc)}
 
-        # The package caps changed_functions at 500 (CRG_MAX_CHANGED_FUNCS)
-        # and flags the truncation; surface it as a degraded status.
         status = "degraded" if analysis.get("functions_truncated") else "ok"
         document = _build_document(
             analysis,
@@ -164,13 +162,49 @@ class EnrichWithCrgStage(Stage):
             build={"mode": build_mode, "duration_ms": build_duration_ms},
             repo_root=str(repo_dir),
         )
-
+        # Wave-two analyses are deliberately isolated: a missing optional API
+        # or a malformed graph can only degrade its own context section.
+        graph_context = dict(document)
+        details: dict[str, Any] = {}
+        if getattr(ctx.cfg, "graph_api_diff", False):
+            started = time.monotonic()
+            try:
+                from ..graph_wave2 import api_surface, build_base_snapshot, snapshot
+                base_snapshot = build_base_snapshot(ctx, tool_version)
+                graph_context["api_surface"] = {"status": "ok", "base_commit": getattr(ctx.state, "base_commit", ""), **api_surface(base_snapshot, snapshot(store), changed_files)}
+            except Exception as exc:  # noqa: BLE001
+                log_warning(f"CRG API-surface analysis degraded ({type(exc).__name__}: {exc})")
+                graph_context["api_surface"] = {"status": "degraded", "base_commit": getattr(ctx.state, "base_commit", ""), "error": str(exc)}
+            details["graph_api_diff_ms"] = int((time.monotonic() - started) * 1000)
+        if getattr(ctx.cfg, "graph_flows", False):
+            started = time.monotonic()
+            try:
+                from ..graph_wave2 import flows
+                graph_context["flows"] = flows(store, changed_files)
+            except Exception as exc:  # noqa: BLE001
+                log_warning(f"CRG flow analysis degraded ({type(exc).__name__}: {exc})")
+                graph_context["flows"] = {"status": "degraded", "affected_count": 0, "top": [], "error": str(exc)}
+            details["graph_flows_ms"] = int((time.monotonic() - started) * 1000)
+        if getattr(ctx.cfg, "graph_arch", False):
+            started = time.monotonic()
+            try:
+                from ..graph_wave2 import architecture
+                graph_context["architecture"] = architecture(store, changed_files)
+            except Exception as exc:  # noqa: BLE001
+                log_warning(f"CRG architecture analysis degraded ({type(exc).__name__}: {exc})")
+                graph_context["architecture"] = {"status": "degraded", "hubs_touched": [], "bridges_touched": [], "communities_crossed": 0, "community_labels": {}, "error": str(exc)}
+            details["graph_arch_ms"] = int((time.monotonic() - started) * 1000)
         try:
             _write_artifact(ctx, document)
         except Exception as exc:  # noqa: BLE001
             log_warning(f"CRG artifact write failed ({type(exc).__name__}: {exc}); continuing without artifact")
+        try:
+            _write_graph_context(ctx, graph_context)
+        except Exception as exc:  # noqa: BLE001
+            log_warning(f"Graph-context artifact write failed ({type(exc).__name__}: {exc}); continuing without artifact")
 
         ctx.extras["crg_analysis"] = document
+        ctx.extras["graph_context"] = graph_context
         _log(
             f"CRG enrichment complete: risk_score={document['risk_score']:.2f}, "
             f"changed_functions={len(document['changed_functions'])}, "
@@ -183,6 +217,7 @@ class EnrichWithCrgStage(Stage):
             "crg_risk_score": document["risk_score"],
             "crg_changed_functions": len(document["changed_functions"]),
             "crg_test_gaps": len(document["test_gaps"]),
+            **details,
         }
 
 
@@ -299,6 +334,10 @@ def _write_failure_document(ctx: StageContext, *, tool_version: str | None, erro
         _write_artifact(ctx, document)
     except Exception as exc:  # noqa: BLE001
         log_warning(f"CRG failure artifact write failed ({type(exc).__name__}: {exc})")
+    try:
+        _write_graph_context(ctx, document)
+    except Exception as exc:  # noqa: BLE001
+        log_warning(f"Graph-context failure artifact write failed ({type(exc).__name__}: {exc})")
 
 
 def _write_artifact(ctx: StageContext, document: dict[str, Any]) -> None:
@@ -309,4 +348,11 @@ def _write_artifact(ctx: StageContext, document: dict[str, Any]) -> None:
     )
 
 
+
+def _write_graph_context(ctx: StageContext, document: dict[str, Any]) -> None:
+    """Write the additive graph-context projection."""
+    ctx.artifacts.graph_context.write_text(
+        json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
 __all__ = ["EnrichWithCrgStage"]

@@ -1629,6 +1629,8 @@ class TestEnrichWithCrgStage:
         assert written["status"] == "failed"
         assert "simulated graph build error" in written["error"]
         assert written["tool_version"] == "1.0.0"
+        graph_written = json.loads(artifacts.graph_context.read_text())
+        assert graph_written["status"] == "failed"
 
     # --- graceful-degradation: analysis failure ---
 

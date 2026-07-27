@@ -57,3 +57,11 @@ Review output is written under `REVIEW_ARTIFACT_ROOT/pr-<PR_ID>/runs/<RUN_ID>/`.
 ## CRG graph cache
 
 With `CRG_ENABLED=1`, the Tree-sitter knowledge graph persists across runs at `CRG_CACHE_DIR/<repo_id>/crg-<tool_version>/crg.db`. Container runs mount the dedicated named volume `reviewforge-crg-cache` (override with `REVIEW_CRG_CACHE_VOLUME_NAME`) at `/workspace/crg-cache` and set `CRG_CACHE_DIR` accordingly; local runs default to `REVIEW_ARTIFACT_ROOT/crg-cache`. The first run for a repository performs a full build (seconds to tens of seconds depending on repo size); subsequent runs apply an incremental update, typically under two seconds — watch for `CRG graph incremental build` vs `CRG graph full build` in `run.log`. Upgrading `code-review-graph` changes the version-keyed directory and costs exactly one cold rebuild. To force a cold rebuild manually, delete the repo's `crg-<version>` directory from the volume (`attach-volume.ps1` mounts the artifact volume for inspection; use `--volume reviewforge-crg-cache:/workspace/crg-cache` for the cache volume).
+
+
+When `GRAPH_API_DIFF=1`, immutable base snapshots are cached under
+`CRG_CACHE_DIR/<repo-id>/crg-<version>/base-snapshots/<base-sha>.json`.
+The first run for a new base SHA pays one disposable worktree graph build;
+reruns reuse the snapshot. `GRAPH_FLOWS=1` and `GRAPH_ARCH=1` add only warm
+Python-side analysis and degrade independently when optional graph data is
+unavailable.

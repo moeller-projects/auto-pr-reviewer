@@ -263,6 +263,11 @@ class Config:
     #: single-pi prompt prefix (env ``CRG_CONTEXT_MAX_BYTES``). ``0`` disables
     #: the injection.
     crg_context_max_bytes: int = field(default=8192, compare=False)
+    #: Optional deterministic CRG wave-two analyses.
+    graph_api_diff: bool = field(default=False, compare=False)
+    graph_flows: bool = field(default=False, compare=False)
+    graph_arch: bool = field(default=False, compare=False)
+    graph_context_max_bytes: int = field(default=12288, compare=False)
 
     # ------------------------------------------------------------------ env --
 
@@ -411,6 +416,12 @@ class Config:
             crg_cache_dir=Path(os.environ["CRG_CACHE_DIR"]) if os.getenv("CRG_CACHE_DIR") else None,
             crg_context_max_bytes=require_uint(
                 "CRG_CONTEXT_MAX_BYTES", os.getenv("CRG_CONTEXT_MAX_BYTES", "8192")
+            ),
+            graph_api_diff=is_true(os.getenv("GRAPH_API_DIFF")),
+            graph_flows=is_true(os.getenv("GRAPH_FLOWS")),
+            graph_arch=is_true(os.getenv("GRAPH_ARCH")),
+            graph_context_max_bytes=require_uint(
+                "GRAPH_CONTEXT_MAX_BYTES", os.getenv("GRAPH_CONTEXT_MAX_BYTES", "12288")
             ),
         )
         return cfg
@@ -787,6 +798,12 @@ def _build_from_sources(
         crg_cache_dir=Path(crg_cache_dir_raw) if (crg_cache_dir_raw := cli_or_env("crg_cache_dir", "CRG_CACHE_DIR")) else None,
         crg_context_max_bytes=require_uint(
             "CRG_CONTEXT_MAX_BYTES", cli_or_env("crg_context_max_bytes", "CRG_CONTEXT_MAX_BYTES", "8192")
+        ),
+        graph_api_diff=is_true(cli_or_env("graph_api_diff", "GRAPH_API_DIFF")),
+        graph_flows=is_true(cli_or_env("graph_flows", "GRAPH_FLOWS")),
+        graph_arch=is_true(cli_or_env("graph_arch", "GRAPH_ARCH")),
+        graph_context_max_bytes=require_uint(
+            "GRAPH_CONTEXT_MAX_BYTES", cli_or_env("graph_context_max_bytes", "GRAPH_CONTEXT_MAX_BYTES", "12288")
         ),
     )
 

@@ -98,6 +98,73 @@ def _format_crg_context(analysis: dict[str, Any], max_bytes: int) -> str:
         return ""
     return _utf8_prefix("\n".join(lines), max_bytes)
 
+def _format_wave2_context(context: dict[str, Any], max_bytes: int) -> str:
+    """Format wave-two graph context into independently bounded sections."""
+    if not isinstance(context, dict) or max_bytes <= 0:
+        return ""
+
+    def entries(value: Any) -> list[dict[str, Any]]:
+        return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+    sections: list[str] = []
+    api = context.get("api_surface")
+    if isinstance(api, dict) and api.get("status") in {"ok", "degraded"}:
+        lines = ["Deterministic API-surface changes:"]
+        for item in entries(api.get("breaking_candidates"))[:15]:
+            lines.append(
+                f"  - {item.get('symbol', '?')} (callers={item.get('caller_count', 0)})"
+            )
+        added = api.get("added_nodes")
+        if isinstance(added, list):
+            for name in added[:10]:
+                lines.append(f"  - added {name}")
+        removed = api.get("removed_nodes")
+        if isinstance(removed, list):
+            for name in removed[:10]:
+                lines.append(f"  - removed {name}")
+        sections.append("\n".join(lines))
+
+    flow = context.get("flows")
+    flow_lines: list[str] = []
+    if isinstance(flow, dict):
+        for item in entries(flow.get("top"))[:10]:
+            try:
+                criticality = float(item.get("criticality", 0) or 0)
+            except (TypeError, ValueError):
+                criticality = 0.0
+            flow_lines.append(
+                f"  - {item.get('entry_point', '?')} (criticality={criticality:.3f})"
+            )
+    if flow_lines:
+        sections.append("\n".join(["Critical flows reached by this change:", *flow_lines]))
+
+    arch = context.get("architecture")
+    if isinstance(arch, dict):
+        hubs = entries(arch.get("hubs_touched"))
+        bridges = entries(arch.get("bridges_touched"))
+        crossed = arch.get("communities_crossed", 0)
+        if hubs or bridges or crossed:
+            sections.append(
+                "\n".join(
+                    [
+                        "Architecture facts:",
+                        f"  - hubs: {', '.join(str(x.get('qualified_name', '?')) for x in hubs)}",
+                        f"  - bridges: {', '.join(str(x.get('qualified_name', '?')) for x in bridges)}",
+                        f"  - community boundaries crossed: {crossed}",
+                    ]
+                )
+            )
+
+    if not sections:
+        return ""
+    share, remainder = divmod(max_bytes, len(sections))
+    bounded = [
+        _utf8_prefix(section, share + (index < remainder))
+        for index, section in enumerate(sections)
+        if share + (index < remainder) > 0
+    ]
+    return _utf8_prefix("\n".join(section for section in bounded if section), max_bytes)
+
 
 def _runner_usage(runner: Any) -> dict[str, int]:
     usage = getattr(runner, "token_usage", None)
@@ -151,6 +218,16 @@ def _build_single_pi_prefix(ctx: StageContext) -> str:
         )
         if _crg_summary:
             parts += ["\nDeterministic graph context (Tree-sitter code-review graph):\n" + _crg_summary]
+    if graph_context := ctx.extras.get("graph_context"):
+        if any(
+            getattr(ctx.cfg, name, False)
+            for name in ("graph_api_diff", "graph_flows", "graph_arch")
+        ):
+            wave2 = _format_wave2_context(
+                graph_context, getattr(ctx.cfg, "graph_context_max_bytes", 12288)
+            )
+            if wave2:
+                parts += ["\n" + wave2]
     return "\n".join(parts)
 
 

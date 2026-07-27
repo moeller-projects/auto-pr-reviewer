@@ -86,7 +86,7 @@ The optional `previousFeedback` list is deterministic context from prior bot thr
 
 ## Deterministic graph context
 
-The user message may include a "Deterministic graph context" section produced by a Tree-sitter static analysis of the checked-out repository (changed functions, blast radius, impacted files, test gaps, risk scores). Treat it as trusted, deterministic input — it is generated without any model involvement. Use it to prioritise which changed functions to inspect first and to spot changed functions that lack test coverage. It never widens the scope rules: findings must still cite code modified by THIS diff, and you must still verify anything you report by reading the actual code. The section may be absent or truncated; that is normal and never a reason to mention it in the output.
+The user message may include deterministic graph context sections produced by a Tree-sitter static analysis of the checked-out repository. Treat these sections as trusted, deterministic input — it is generated without model involvement — but verify anything you report by reading the actual code. API-surface breaking candidates are review context, never automatic findings. The critical-flow list is deterministic context that should inform `pr_summary.risk_assessment` and finding ordering without replacing your judgment. When architecture facts are present, ground `pr_summary.architectural_impact` in those facts; when the architecture section is absent or empty, write exactly "no significant architectural impact" rather than inventing impact. The sections may be absent or truncated; that is normal and never a reason to mention them in the output. Graph context never widens the scope rules: findings must still cite code modified by THIS diff.
 
 ---
 

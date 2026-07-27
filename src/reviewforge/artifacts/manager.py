@@ -15,7 +15,6 @@ import time
 
 from ..config import Config
 
-#: Stable contract of known artifact names; best-effort outputs may be absent.
 ARTIFACT_NAMES: tuple[str, ...] = (
     "metadata.json",
     "diff.patch",
@@ -31,6 +30,7 @@ ARTIFACT_NAMES: tuple[str, ...] = (
     "sarif-findings.json",
     "run.log",
     "crg-analysis.json",
+    "graph-context.json",
 )
 
 
@@ -65,6 +65,7 @@ class Artifacts:
     threads: Path
     run_log: Path
     crg_analysis: Path
+    graph_context: Path
 
     def as_dict(self) -> dict[str, str]:
         """Return a dict mapping artifact name → absolute path string.
@@ -88,6 +89,7 @@ class Artifacts:
             "work-items.json": str(self.work_items),
             "threads.json": str(self.threads),
             "run.log": str(self.run_log),
+            "graph-context.json": str(self.graph_context),
             "crg-analysis.json": str(self.crg_analysis),
         }
 
@@ -145,6 +147,7 @@ def create(cfg: Config) -> Artifacts:
         threads=root / "threads.json",
         run_log=root / "run.log",
         crg_analysis=root / "crg-analysis.json",
+        graph_context=root / "graph-context.json",
     )
 
 
