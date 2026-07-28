@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 from reviewforge.ai.runner import PiRunner, _parse_context_file_reads
 from reviewforge.config import Config
+from reviewforge.artifacts import manager
+from reviewforge.pipeline.stage import StageContext
 from reviewforge.pipeline.context_staging import stage_context_files
 from reviewforge.reasoning.single_pi import (
     _byte_cap_with_pointer,
@@ -69,7 +71,12 @@ def _context(tmp_path: Path) -> SimpleNamespace:
     paths["graph_context"].write_text(json.dumps({"status": "ok", "impacted_files": ["src/a.py"]}), encoding="utf-8")
     return SimpleNamespace(
         cfg=SimpleNamespace(ado_token="cli-secret"),
-        state=SimpleNamespace(repo_dir=tmp_path / "repo", files=["src/a.py"]),
+        state=SimpleNamespace(
+            repo_dir=tmp_path / "repo",
+            files=["src/a.py"],
+            diff_text="diff --git a/src/a.py b/src/a.py\n",
+            cleanup_paths=[],
+        ),
         artifacts=SimpleNamespace(**paths),
         extras={"review_context": {"mode": "full", "previousComments": []}},
     )
@@ -86,6 +93,9 @@ def test_staging_copies_complete_data_and_redacts_secrets(tmp_path, monkeypatch)
     assert "cli-secret" not in (staged / "metadata.json").read_text()
     assert "env-secret" not in (staged / "metadata.json").read_text()
     assert (staged / "commits.txt").read_text() == "abc first\ndef second\n"
+    assert ".reviewforge-context" not in ctx.state.diff_text
+    assert (staged / "changed-files.json").exists()
+    assert staged in ctx.state.cleanup_paths
     index = json.loads((staged / "index.json").read_text())
     assert index["metadata.json"]["top_level_keys"] == ["project", "token"]
     assert ".reviewforge-context" not in json.dumps(ctx.state.files)
@@ -96,6 +106,14 @@ def test_staging_skips_without_checkout(tmp_path):
     ctx.state.repo_dir = None
     assert stage_context_files(ctx) is None
     assert "context_staging_dir" not in ctx.extras
+def test_skip_path_has_no_context_preamble_or_pointers(tmp_path):
+    cfg = _cfg(tmp_path)
+    artifacts = manager.create(cfg)
+    state = SimpleNamespace(repo_dir=None, files=[], cleanup_paths=[])
+    ctx = StageContext(cfg=cfg, artifacts=artifacts, state=state, pi=SimpleNamespace())
+    assert stage_context_files(ctx) is None
+    from reviewforge.reasoning.single_pi import _build_single_pi_prefix
+    assert ".reviewforge-context" not in _build_single_pi_prefix(ctx)
 
 
 def test_staging_skips_preexisting_checkout_context(tmp_path):

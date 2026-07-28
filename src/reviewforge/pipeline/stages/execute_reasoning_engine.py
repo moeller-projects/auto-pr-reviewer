@@ -7,8 +7,6 @@ from ...artifacts.builder import write_json
 from ...reasoning.engine import get_engine
 from ... import __version__
 from ...runlog import warning
-from ...artifacts.builder import write_json
-from ...reasoning.engine import get_engine
 from ..projection import review_result_to_final_doc
 from ..review_state import filter_dismissed_findings
 from ..sarif import review_result_to_sarif

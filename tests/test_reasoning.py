@@ -601,12 +601,12 @@ class TestSinglePiReasoningEngine:
         result = SinglePiReasoningEngine().execute(ctx)
 
         assert len(prompts) == 2
-        for prompt in prompts:
-            assert prompt.startswith("Single-call reasoning review for Azure DevOps PR #42.")
-            assert "Repository/project metadata:" in prompt
-            assert "Changed files:" in prompt
-            assert "Previous review feedback:" in prompt
-            assert "Treat fixed findings as addressed, but flag them when reintroduced and set regression=true." in prompt
+        assert prompts[0].startswith("Single-call reasoning review for Azure DevOps PR #42.")
+        assert "Repository/project metadata:" in prompts[0]
+        assert "Changed files:" in prompts[0]
+        assert "Previous review feedback:" in prompts[0]
+        assert "Treat fixed findings as addressed, but flag them when reintroduced and set regression=true." in prompts[0]
+        assert "Single-call reasoning review" not in prompts[1]
         assert [u.model_dump() for u in result.metrics.chunkTokenUsage] == [
             {"input": 10, "output": 5, "total": 15},
             {"input": 7, "output": 2, "total": 9},

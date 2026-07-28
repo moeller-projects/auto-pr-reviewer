@@ -14,7 +14,7 @@ _CONTEXT_DIR = ".reviewforge-context"
 _FILE_DESCRIPTIONS = {
     "metadata.json": "Pull request and repository metadata",
     "commits.txt": "Commit subjects in the reviewed range",
-    "changed-files.txt": "Files changed by the reviewed range",
+    "changed-files.json": "Files changed by the reviewed range",
     "work-items.json": "Linked Azure DevOps work items",
     "threads.json": "Existing pull request comment threads",
     "review-state.json": "Deterministic previous-review state",
@@ -82,7 +82,7 @@ def stage_context_files(ctx: Any, *, include_graph_context: bool = True) -> Path
     sources = {
         "metadata.json": artifacts.metadata,
         "commits.txt": artifacts.commits,
-        "changed-files.txt": artifacts.changed_files,
+        "changed-files.json": artifacts.changed_files,
         "work-items.json": artifacts.work_items,
         "threads.json": artifacts.threads,
     }
@@ -106,6 +106,9 @@ def stage_context_files(ctx: Any, *, include_graph_context: bool = True) -> Path
     index_path = staging_dir / "index.json"
     index_path.write_text(json.dumps(index, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     ctx.extras["context_staging_dir"] = staging_dir
+    cleanup_paths = getattr(getattr(ctx, "state", None), "cleanup_paths", None)
+    if isinstance(cleanup_paths, list) and staging_dir not in cleanup_paths:
+        cleanup_paths.append(staging_dir)
     ctx.extras["context_staging_index"] = index
     return staging_dir
 

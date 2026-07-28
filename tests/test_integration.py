@@ -336,10 +336,10 @@ class TestFullRunEndToEnd:
         assert outcome.exit_code == 0, [r.error for r in outcome.stages if r.status == "failed"]
         chunk_calls = [c for c in pi.calls if c[0].startswith("single-pi chunk")]
         assert len(chunk_calls) > 1
-        # Every chunk carries the shared context when no session persists it.
-        for _stage, instruction in chunk_calls:
-            assert "Single-call reasoning review" in instruction
-            assert "src/app.py" in instruction
+        # Chunk one owns the shared context; later chunks carry only their diff.
+        assert "Single-call reasoning review" in chunk_calls[0][1]
+        assert "src/app.py" in chunk_calls[0][1]
+        assert "Single-call reasoning review" not in chunk_calls[1][1]
         # Identical findings across chunks dedupe to a single posted thread.
         assert len(ado.created_threads) == 1
         # The posted summary comes from the synthesis call, not boilerplate.

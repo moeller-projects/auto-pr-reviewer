@@ -193,7 +193,7 @@ def _format_wave2_context(
         else None
     )
     full_pointer = (
-        ".reviewforge-context/graph-context.json (complete document)"
+        ".reviewforge-context/graph-context.json (key: wave2)"
         if context_dir
         else None
     )
@@ -256,7 +256,7 @@ def _format_wave2_context(
                         render_section(
                             "",
                             flow_lines,
-                            10,
+                            15,
                             pointer.format(key="flows.top") if pointer else None,
                         ),
                     ]
@@ -365,7 +365,7 @@ def _build_single_pi_prefix(ctx: StageContext) -> str:
                 "\nChanged files:",
                 changed_files,
                 _CONTEXT_MAX_FILES,
-                pointer("changed-files.txt", "all entries"),
+                pointer("changed-files.json", "all entries"),
             )
         )
     else:
@@ -562,7 +562,7 @@ def _build_chunk_instruction(
     *,
     include_shared_prefix: bool,
 ) -> str:
-    prefix = _build_single_pi_prefix(ctx) if include_shared_prefix or index == 1 else ""
+    prefix = _build_single_pi_prefix(ctx) if index == 1 else ""
     body = (
         f"Review chunk {index}/{total} of the same PR diff. "
         "Return only a JSON object with findings and uncertainties; do not summarize the PR.\n"
