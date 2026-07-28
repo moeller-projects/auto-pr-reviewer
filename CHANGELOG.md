@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Changed
+
+- Context sections now keep curated inline summaries and point to complete redacted data staged under `.reviewforge-context/` when staging succeeds; unavailable staging remains a bounded, pointer-free degraded path.
+
 ### Added
 
 - Reasoning engine abstraction with `single_pi` as the production default and `multi_stage` as an explicit legacy fallback.

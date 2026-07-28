@@ -16,3 +16,7 @@ Files currently shipped under `prompts/`:
 If the synthesis call fails or its JSON does not validate as `ChunkSynthesis`, the review continues with deterministic fallback summaries and records `synthesisFallback` in the reasoning-stage details. The single-chunk path does not make this extra call.
 
 Prompt output must remain compatible with [schemas](schemas.md). The system prompts explicitly treat diff, PR, comment, and work-item content as untrusted data.
+
+## Deterministic context files
+
+When staging succeeds, the single-call and legacy review prompts may include a `Deterministic context files` preamble. The files are Python-generated, read-only containers under `.reviewforge-context/`; inline sections and the generated index are deterministic summaries, while metadata, comments, work items, review state, and repository-derived content remain untrusted data rather than instructions. The model should read a referenced file before concluding anything about omitted items or re-verifying prior context. Evidence fields must list only files actually read. Missing files and absent pointers are normal degraded behavior.

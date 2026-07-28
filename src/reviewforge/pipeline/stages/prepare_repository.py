@@ -8,11 +8,9 @@ from ...artifacts.builder import changed_files, write_json
 from ...ado.client import resolve_branches
 from ...git import ops as git_ops
 from ...runlog import info as _log
+from ..context_staging import stage_context_files
 from ..review_state import ReviewMode
 from ..stage import Stage, StageContext
-
-
-
 
 
 class PrepareRepositoryStage(Stage):
@@ -50,6 +48,7 @@ class PrepareRepositoryStage(Stage):
             git_ops.run_git(state.repo_dir, "log", "--oneline", state.range_spec),
             encoding="utf-8",
         )
+        stage_context_files(ctx, include_graph_context=False)
 
         _log(f"changed files: {len(state.files)}")
         _log(f"diff size: {len(state.diff_text.encode())} bytes")

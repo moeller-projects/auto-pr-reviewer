@@ -65,3 +65,7 @@ The first run for a new base SHA pays one disposable worktree graph build;
 reruns reuse the snapshot. `GRAPH_FLOWS=1` and `GRAPH_ARCH=1` add only warm
 Python-side analysis and degrade independently when optional graph data is
 unavailable.
+
+## Progressive context disclosure
+
+There is nothing new to operate. `.reviewforge-context/` is created inside the disposable repository checkout, refreshed during the run, and removed with that checkout. It is not an artifact-volume cache or an operator-managed directory.

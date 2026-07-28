@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Any
 
 from ...runlog import info as _log, warning as log_warning
+from ..context_staging import stage_context_files
 from ..stage import Stage, StageContext
 
 _CRG_DISTRIBUTION = "code-review-graph"
@@ -120,6 +121,7 @@ class EnrichWithCrgStage(Stage):
         except Exception as exc:  # noqa: BLE001
             log_warning(f"CRG graph build failed ({type(exc).__name__}: {exc}); skipping enrichment")
             _write_failure_document(ctx, tool_version=tool_version, error=str(exc))
+            stage_context_files(ctx)
             return {"crg_status": "build_failed", "crg_error": str(exc)}
 
         try:
@@ -152,6 +154,7 @@ class EnrichWithCrgStage(Stage):
         except Exception as exc:  # noqa: BLE001
             log_warning(f"CRG analysis failed ({type(exc).__name__}: {exc}); skipping enrichment")
             _write_failure_document(ctx, tool_version=tool_version, error=str(exc))
+            stage_context_files(ctx)
             return {"crg_status": "analysis_failed", "crg_error": str(exc)}
 
         status = "degraded" if analysis.get("functions_truncated") else "ok"
@@ -202,6 +205,7 @@ class EnrichWithCrgStage(Stage):
             _write_graph_context(ctx, graph_context)
         except Exception as exc:  # noqa: BLE001
             log_warning(f"Graph-context artifact write failed ({type(exc).__name__}: {exc}); continuing without artifact")
+        stage_context_files(ctx)
 
         ctx.extras["crg_analysis"] = document
         ctx.extras["graph_context"] = graph_context
@@ -334,6 +338,7 @@ def _write_failure_document(ctx: StageContext, *, tool_version: str | None, erro
         _write_artifact(ctx, document)
     except Exception as exc:  # noqa: BLE001
         log_warning(f"CRG failure artifact write failed ({type(exc).__name__}: {exc})")
+    ctx.artifacts.graph_context.unlink(missing_ok=True)
     try:
         _write_graph_context(ctx, document)
     except Exception as exc:  # noqa: BLE001

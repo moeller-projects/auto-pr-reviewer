@@ -29,6 +29,10 @@ _CRG_MAX_FUNCTIONS = 15
 _CRG_MAX_PATHS = 30
 _CRG_MAX_TEST_GAPS = 15
 
+_CONTEXT_MAX_FILES = 50
+_CONTEXT_MAX_ITEMS = 25
+_CONTEXT_MAX_REVIEW_ITEMS = 25
+
 def _crg_entries(value: Any) -> list[dict[str, Any]]:
     """Return only dict entries; malformed CRG items are dropped."""
     return [item for item in value or [] if isinstance(item, dict)]
@@ -50,13 +54,49 @@ def _crg_entry_sort_key(item: dict[str, Any]) -> tuple:
     return (-_crg_risk(item), str(file), str(name))
 
 
-def _format_crg_context(analysis: dict[str, Any], max_bytes: int) -> str:
-    """Format CRG analysis as a compact, deterministic prompt block."""
-    if not isinstance(analysis, dict) or not analysis:
+def render_section(title: str, items: list[Any], max_items: int, pointer: str | None) -> str:
+    """Render a bounded section and point at omitted source data when available."""
+    values = list(items or [])
+    shown = values[:max_items] if max_items > 0 else []
+    if all(isinstance(item, str) for item in values):
+        body = "\n".join(str(item) for item in shown)
+    else:
+        body = json.dumps(shown, ensure_ascii=False)
+    rendered = f"{title}\n{body}" if body else title
+    omitted = max(0, len(values) - len(shown))
+    if omitted and pointer:
+        rendered += f"\n…and {omitted} more — full data: {pointer}"
+    return rendered
+
+
+def _byte_cap_with_pointer(text: str, max_bytes: int, pointer: str | None) -> str:
+    if max_bytes <= 0 or len(text.encode("utf-8")) <= max_bytes:
+        return "" if max_bytes <= 0 else text
+    if not pointer:
+        return _utf8_prefix(text, max_bytes)
+    marker = f"…and more — full data: {pointer}"
+    budget = max_bytes - len(marker.encode("utf-8")) - 1
+    if budget <= 0:
+        return _utf8_prefix(text, max_bytes)
+    return _utf8_prefix(text, budget).rstrip() + "\n" + marker
+
+
+def _format_crg_context(
+    analysis: dict[str, Any],
+    max_bytes: int,
+    context_dir: Path | None = None,
+) -> str:
+    """Format the complete CRG analysis as a bounded progressive summary."""
+    if not isinstance(analysis, dict) or not analysis or max_bytes <= 0:
         return ""
     status = analysis.get("status") or analysis.get("crg_status")
     if status not in {"ok", "degraded"}:
         return ""
+    pointer = (
+        ".reviewforge-context/graph-context.json (key: {key})"
+        if context_dir
+        else None
+    )
     lines: list[str] = []
     summary = analysis.get("summary", "")
     if summary:
@@ -67,67 +107,140 @@ def _format_crg_context(analysis: dict[str, Any], max_bytes: int) -> str:
         lines.append(f"Overall risk score: {float(analysis['risk_score']):.2f}")
     except (KeyError, TypeError, ValueError):
         pass
+
     priorities = sorted(_crg_entries(analysis.get("review_priorities")), key=_crg_entry_sort_key)
     if priorities:
-        lines.append("Review priorities (highest risk first):")
-        for item in priorities[:_CRG_MAX_PRIORITIES]:
-            name = item.get("qualified_name") or item.get("name", "?")
-            lines.append(f"  - {name} (risk={_crg_risk(item):.2f})")
+        lines.extend(
+            render_section(
+                "Review priorities (highest risk first):",
+                [
+                    f"  - {item.get('qualified_name') or item.get('name', '?')} "
+                    f"(risk={_crg_risk(item):.2f})"
+                    for item in priorities
+                ],
+                _CRG_MAX_PRIORITIES,
+                pointer.format(key="review_priorities") if pointer else None,
+            ).splitlines()
+        )
     functions = sorted(_crg_entries(analysis.get("changed_functions")), key=_crg_entry_sort_key)
     if functions:
-        lines.append("Changed functions (highest risk first):")
-        for item in functions[:_CRG_MAX_FUNCTIONS]:
-            name = item.get("qualified_name") or item.get("name", "?")
-            file = item.get("file") or item.get("file_path") or "?"
-            lines.append(f"  - {name} ({file}, risk={_crg_risk(item):.2f})")
-    impacted = sorted(str(p) for p in (analysis.get("impacted_files") or []))
+        lines.extend(
+            render_section(
+                "Changed functions (highest risk first):",
+                [
+                    f"  - {item.get('qualified_name') or item.get('name', '?')} "
+                    f"({item.get('file') or item.get('file_path') or '?'}, "
+                    f"risk={_crg_risk(item):.2f})"
+                    for item in functions
+                ],
+                _CRG_MAX_FUNCTIONS,
+                pointer.format(key="changed_functions") if pointer else None,
+            ).splitlines()
+        )
+    impacted = sorted(str(path) for path in (analysis.get("impacted_files") or []))
     if impacted:
-        lines.append("Impacted files:")
-        for path in impacted[:_CRG_MAX_PATHS]:
-            lines.append(f"  - {path}")
+        lines.extend(
+            render_section(
+                "Impacted files:",
+                [f"  - {path}" for path in impacted],
+                _CRG_MAX_PATHS,
+                pointer.format(key="impacted_files") if pointer else None,
+            ).splitlines()
+        )
     test_gaps = sorted(_crg_entries(analysis.get("test_gaps")), key=_crg_entry_sort_key)
     if test_gaps:
-        lines.append("Functions without test coverage:")
-        for gap in test_gaps[:_CRG_MAX_TEST_GAPS]:
-            qn = gap.get("qualified_name") or gap.get("name", "?")
-            lines.append(f"  - {qn}")
-    affected_flows = analysis.get("affected_flows") or []
+        lines.extend(
+            render_section(
+                "Functions without test coverage:",
+                [
+                    f"  - {item.get('qualified_name') or item.get('name', '?')}"
+                    for item in test_gaps
+                ],
+                _CRG_MAX_TEST_GAPS,
+                pointer.format(key="test_gaps") if pointer else None,
+            ).splitlines()
+        )
+    affected_flows = [str(flow) for flow in (analysis.get("affected_flows") or [])]
     if affected_flows:
-        lines.append(f"Affected flows: {', '.join(str(f) for f in affected_flows[:_CRG_MAX_PRIORITIES])}")
-    if max_bytes <= 0:
-        return ""
-    return _utf8_prefix("\n".join(lines), max_bytes)
+        if len(affected_flows) <= _CRG_MAX_PRIORITIES:
+            lines.append(f"Affected flows: {', '.join(affected_flows)}")
+        else:
+            lines.extend(
+                render_section(
+                    "Affected flows:",
+                    [f"  - {flow}" for flow in affected_flows],
+                    _CRG_MAX_PRIORITIES,
+                    pointer.format(key="affected_flows") if pointer else None,
+                ).splitlines()
+            )
+    return _byte_cap_with_pointer(
+        "\n".join(lines),
+        max_bytes,
+        pointer.format(key="full") if pointer else None,
+    )
 
-def _format_wave2_context(context: dict[str, Any], max_bytes: int) -> str:
-    """Format wave-two graph context into independently bounded sections."""
+def _format_wave2_context(
+    context: dict[str, Any],
+    max_bytes: int,
+    context_dir: Path | None = None,
+) -> str:
+    """Format wave-two graph context into progressive-disclosure sections."""
     if not isinstance(context, dict) or max_bytes <= 0:
         return ""
-
-    def entries(value: Any) -> list[dict[str, Any]]:
-        return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
-
+    pointer = (
+        ".reviewforge-context/graph-context.json (key: {key})"
+        if context_dir
+        else None
+    )
+    full_pointer = (
+        ".reviewforge-context/graph-context.json (complete document)"
+        if context_dir
+        else None
+    )
     sections: list[str] = []
     api = context.get("api_surface")
     if isinstance(api, dict) and api.get("status") in {"ok", "degraded"}:
-        lines = ["Deterministic API-surface changes:"]
-        for item in entries(api.get("breaking_candidates"))[:15]:
-            lines.append(
-                f"  - {item.get('symbol', '?')} (callers={item.get('caller_count', 0)})"
-            )
-        added = api.get("added_nodes")
-        if isinstance(added, list):
-            for name in added[:10]:
-                lines.append(f"  - added {name}")
-        removed = api.get("removed_nodes")
-        if isinstance(removed, list):
-            for name in removed[:10]:
-                lines.append(f"  - removed {name}")
-        sections.append("\n".join(lines))
+        api_lines = ["Deterministic API-surface changes:"]
+        candidates = [
+            f"  - {item.get('symbol', '?')} (callers={item.get('caller_count', 0)})"
+            for item in api.get("breaking_candidates", [])
+            if isinstance(item, dict)
+        ]
+        api_lines.extend(
+            render_section(
+                "",
+                candidates,
+                15,
+                pointer.format(key="api_surface.breaking_candidates") if pointer else None,
+            ).splitlines()
+        )
+        added = api.get("added_nodes") if isinstance(api.get("added_nodes"), list) else []
+        api_lines.extend(
+            render_section(
+                "",
+                [f"  - added {name}" for name in added],
+                10,
+                pointer.format(key="api_surface.added_nodes") if pointer else None,
+            ).splitlines()
+        )
+        removed = api.get("removed_nodes") if isinstance(api.get("removed_nodes"), list) else []
+        api_lines.extend(
+            render_section(
+                "",
+                [f"  - removed {name}" for name in removed],
+                10,
+                pointer.format(key="api_surface.removed_nodes") if pointer else None,
+            ).splitlines()
+        )
+        sections.append("\n".join(api_lines))
 
     flow = context.get("flows")
-    flow_lines: list[str] = []
     if isinstance(flow, dict):
-        for item in entries(flow.get("top"))[:10]:
+        flow_lines: list[str] = []
+        flow_items = flow.get("top") if isinstance(flow.get("top"), list) else []
+        for item in flow_items:
+            if not isinstance(item, dict):
+                continue
             try:
                 criticality = float(item.get("criticality", 0) or 0)
             except (TypeError, ValueError):
@@ -135,35 +248,66 @@ def _format_wave2_context(context: dict[str, Any], max_bytes: int) -> str:
             flow_lines.append(
                 f"  - {item.get('entry_point', '?')} (criticality={criticality:.3f})"
             )
-    if flow_lines:
-        sections.append("\n".join(["Critical flows reached by this change:", *flow_lines]))
-
-    arch = context.get("architecture")
-    if isinstance(arch, dict):
-        hubs = entries(arch.get("hubs_touched"))
-        bridges = entries(arch.get("bridges_touched"))
-        crossed = arch.get("communities_crossed", 0)
-        if hubs or bridges or crossed:
+        if flow_lines:
             sections.append(
                 "\n".join(
                     [
-                        "Architecture facts:",
-                        f"  - hubs: {', '.join(str(x.get('qualified_name', '?')) for x in hubs)}",
-                        f"  - bridges: {', '.join(str(x.get('qualified_name', '?')) for x in bridges)}",
-                        f"  - community boundaries crossed: {crossed}",
+                        "Critical flows reached by this change:",
+                        render_section(
+                            "",
+                            flow_lines,
+                            10,
+                            pointer.format(key="flows.top") if pointer else None,
+                        ),
                     ]
                 )
             )
 
-    if not sections:
-        return ""
-    share, remainder = divmod(max_bytes, len(sections))
-    bounded = [
-        _utf8_prefix(section, share + (index < remainder))
-        for index, section in enumerate(sections)
-        if share + (index < remainder) > 0
-    ]
-    return _utf8_prefix("\n".join(section for section in bounded if section), max_bytes)
+    arch = context.get("architecture")
+    if isinstance(arch, dict):
+        hubs = [
+            str(item.get("qualified_name", "?"))
+            for item in arch.get("hubs_touched", [])
+            if isinstance(item, dict)
+        ]
+        bridges = [
+            str(item.get("qualified_name", "?"))
+            for item in arch.get("bridges_touched", [])
+            if isinstance(item, dict)
+        ]
+        crossed = arch.get("communities_crossed", 0)
+        if hubs or bridges or crossed:
+            arch_lines = ["Architecture facts:"]
+            if len(hubs) <= 15:
+                arch_lines.append(f"  - hubs: {', '.join(hubs)}")
+            else:
+                arch_lines.append(
+                    render_section(
+                        "  - hubs:",
+                        hubs,
+                        15,
+                        pointer.format(key="architecture.hubs_touched") if pointer else None,
+                    )
+                )
+            if len(bridges) <= 15:
+                arch_lines.append(f"  - bridges: {', '.join(bridges)}")
+            else:
+                arch_lines.append(
+                    render_section(
+                        "  - bridges:",
+                        bridges,
+                        15,
+                        pointer.format(key="architecture.bridges_touched") if pointer else None,
+                    )
+                )
+            arch_lines.append(f"  - community boundaries crossed: {crossed}")
+            sections.append("\n".join(arch_lines))
+
+    return _byte_cap_with_pointer(
+        "\n".join(sections),
+        max_bytes,
+        full_pointer,
+    )
 
 
 def _runner_usage(runner: Any) -> dict[str, int]:
@@ -186,35 +330,118 @@ def _build_single_pi_prefix(ctx: StageContext) -> str:
     metadata = ctx.metadata or (
         read_json(ctx.artifacts.metadata) if ctx.artifacts.metadata.exists() else {}
     )
-    files_text = getattr(ctx, "files_text", "") or "\n".join(
-        getattr(ctx.state, "files", []) if ctx.state is not None else []
-    ) or "(no changed files)"
+    context_dir = ctx.extras.get("context_staging_dir")
+    staging_index = ctx.extras.get("context_staging_index")
+
+    def pointer(filename: str, key: str) -> str | None:
+        if not context_dir:
+            return None
+        return f".reviewforge-context/{filename} (key: {key})"
+
     parts = [
         f"Single-call reasoning review for Azure DevOps PR #{ctx.cfg.pr_id}.",
         "Return only the rich ReviewResult JSON object defined in the system prompt.",
     ]
+    if isinstance(staging_index, dict) and context_dir:
+        files = [
+            f"  - {name}: {info.get('description', '')}"
+            for name, info in sorted(staging_index.items())
+            if isinstance(info, dict)
+        ]
+        parts.append(
+            "\nDeterministic context files:\n"
+            + "\n".join(files)
+            + "\nInline sections are authoritative summaries; read the referenced files for complete data."
+        )
     if metadata:
         parts += ["\nRepository/project metadata:", json.dumps(metadata, ensure_ascii=False)]
-    parts += ["\nChanged files:", files_text]
-    commits = _commit_lines(ctx)
-    if commits:
-        parts += ["\nCommits in this PR:", "\n".join(commits)]
-    for label, value in (("Linked work items", ctx.extras.get("wi_context", [])), ("Existing PR comments", ctx.extras.get("thread_context", []))):
+
+    changed_files = list(getattr(ctx.state, "files", []) if ctx.state is not None else [])
+    if not changed_files and getattr(ctx, "files_text", ""):
+        changed_files = [line for line in ctx.files_text.splitlines() if line]
+    if changed_files and len(changed_files) > _CONTEXT_MAX_FILES:
+        parts.append(
+            render_section(
+                "\nChanged files:",
+                changed_files,
+                _CONTEXT_MAX_FILES,
+                pointer("changed-files.txt", "all entries"),
+            )
+        )
+    else:
+        files_text = getattr(ctx, "files_text", "") or "\n".join(changed_files) or "(no changed files)"
+        parts += ["\nChanged files:", files_text]
+
+    all_commits = _all_commit_lines(ctx)
+    if all_commits:
+        parts.append(
+            render_section(
+                "\nCommits in this PR:",
+                all_commits,
+                getattr(ctx.cfg, "commit_context_max", 50),
+                pointer("commits.txt", "commits"),
+            )
+        )
+
+    for label, value, filename in (
+        ("Linked work items", ctx.extras.get("wi_context", []), "work-items.json"),
+        ("Existing PR comments", ctx.extras.get("thread_context", []), "threads.json"),
+    ):
         if value:
-            parts += [f"\n{label}:\n{json.dumps(value, ensure_ascii=False)}"]
+            parts.append(
+                render_section(
+                    f"\n{label}:",
+                    value if isinstance(value, list) else [value],
+                    _CONTEXT_MAX_ITEMS,
+                    pointer(filename, "all entries"),
+                )
+            )
+
     if review_context := ctx.extras.get("review_context"):
-        parts += ["\nDeterministic review state:\n" + json.dumps(review_context, ensure_ascii=False, sort_keys=True)]
-        feedback = review_context.get("previousFeedback", [])
+        review_inline = dict(review_context) if isinstance(review_context, dict) else review_context
+        review_pointers: list[str] = []
+        if isinstance(review_inline, dict):
+            review_inline = dict(review_inline)
+            for key in ("previousComments", "activeComments", "resolvedComments", "changedCommits", "changedFiles"):
+                values = review_inline.get(key)
+                if isinstance(values, list) and len(values) > _CONTEXT_MAX_REVIEW_ITEMS:
+                    review_inline[key] = values[:_CONTEXT_MAX_REVIEW_ITEMS]
+                    if context_dir:
+                        review_pointers.append(
+                            f"…and {len(values) - _CONTEXT_MAX_REVIEW_ITEMS} more — full data: "
+                            f".reviewforge-context/review-state.json (key: {key})"
+                        )
+        parts.append(
+            "\nDeterministic review state:\n"
+            + json.dumps(review_inline, ensure_ascii=False, sort_keys=True)
+            + ("\n" + "\n".join(review_pointers) if review_pointers else "")
+        )
+        feedback = review_context.get("previousFeedback", []) if isinstance(review_context, dict) else []
         if feedback:
-            parts += [
-                "\nPrevious review feedback:\n",
-                json.dumps(feedback, ensure_ascii=False, sort_keys=True),
+            if len(feedback) <= _CONTEXT_MAX_ITEMS:
+                parts += [
+                    "\nPrevious review feedback:\n",
+                    json.dumps(feedback, ensure_ascii=False, sort_keys=True),
+                ]
+            else:
+                parts.append(
+                    render_section(
+                        "\nPrevious review feedback:",
+                        feedback,
+                        _CONTEXT_MAX_ITEMS,
+                        pointer("review-state.json", "previousFeedback"),
+                    )
+                )
+            parts.append(
                 "\nDo not re-raise dismissed findings unless the implicated code changed in THIS diff. "
-                "Treat fixed findings as addressed, but flag them when reintroduced and set regression=true.",
-            ]
+                "Treat fixed findings as addressed, but flag them when reintroduced and set regression=true."
+            )
+
     if crg_analysis := ctx.extras.get("crg_analysis"):
         _crg_summary = _format_crg_context(
-            crg_analysis, getattr(ctx.cfg, "crg_context_max_bytes", 8192)
+            crg_analysis,
+            getattr(ctx.cfg, "crg_context_max_bytes", 8192),
+            context_dir,
         )
         if _crg_summary:
             parts += ["\nDeterministic graph context (Tree-sitter code-review graph):\n" + _crg_summary]
@@ -224,7 +451,9 @@ def _build_single_pi_prefix(ctx: StageContext) -> str:
             for name in ("graph_api_diff", "graph_flows", "graph_arch")
         ):
             wave2 = _format_wave2_context(
-                graph_context, getattr(ctx.cfg, "graph_context_max_bytes", 12288)
+                graph_context,
+                getattr(ctx.cfg, "graph_context_max_bytes", 12288),
+                context_dir,
             )
             if wave2:
                 parts += ["\n" + wave2]
@@ -281,14 +510,19 @@ def _utf8_prefix(text: str, max_bytes: int) -> str:
     """Return the longest UTF-8-safe prefix fitting ``max_bytes``."""
     return text.encode("utf-8")[:max_bytes].decode("utf-8", "ignore")
 
-def _commit_lines(ctx: StageContext) -> list[str]:
+def _all_commit_lines(ctx: StageContext) -> list[str]:
     if ctx.artifacts.commits.exists():
         text = ctx.artifacts.commits.read_text(encoding="utf-8")
     elif ctx.state is not None and getattr(ctx.state, "repo_dir", None):
         text = git_ops.run_git(ctx.state.repo_dir, "log", "--oneline", ctx.state.range_spec)
     else:
         text = ""
-    return text.splitlines()[:getattr(ctx.cfg, "commit_context_max", 50)]
+    return text.splitlines()
+
+
+def _commit_lines(ctx: StageContext) -> list[str]:
+    """Return the historical capped commit view used by legacy callers."""
+    return _all_commit_lines(ctx)[:getattr(ctx.cfg, "commit_context_max", 50)]
 
 
 def _diff_chunks(diff_text: str, max_bytes: int) -> list[str]:

@@ -10,6 +10,12 @@ Session reuse is enabled by default for the Pi backend. The default identifier i
 
 Prompts are files, not embedded Python templates. Runtime augmentation adds language and standards where applicable. See [prompt reference](../reference/prompts.md) and [prompt development](../guides/prompt-development.md).
 
-When `CRG_ENABLED` is set, `EnrichWithCrgStage` prepends a deterministic "Deterministic graph context" section to the single-pi user message (before the diff). The section is produced Python-side by the `code-review-graph` package — no model call, no MCP server, no extra Pi tools — and is capped, ordered, and omitted entirely when analysis fails, so failed runs produce byte-identical prompts to disabled runs.
+When `CRG_ENABLED` is set, `EnrichWithCrgStage` prepends deterministic graph context before the diff and refreshes the complete graph artifact in `.reviewforge-context/`. The section is produced Python-side by the `code-review-graph` package — no model call, no MCP server, no extra Pi tools — and is capped and ordered. CRG failure still degrades the graph section without failing the review; the context-file preamble may remain when repository staging succeeded.
+
+## Deterministic context files
+
+After repository preparation, ReviewForge copies the complete available context into `.reviewforge-context/` under the disposable checkout. The directory contains an `index.json` plus redacted copies of metadata, commits, changed files, work items, threads, review state, and current graph context when those artifacts exist. It is skipped when the checkout already owns that path, refreshed after current CRG enrichment, and removed with the checkout; it is not part of `ARTIFACT_NAMES`.
+
+`single_pi` keeps a curated summary inline. When a list or byte budget is truncated, the summary ends with a pointer such as `.reviewforge-context/graph-context.json (key: impacted_files)`. The pointer is omitted when staging is unavailable, so prompts never contain dangling paths. Pi runs with the checkout as its explicit cwd, and the runner records best-effort reads of `.reviewforge-context/` in `context_file_reads`; unparsable Pi stderr reports `unknown`.
 
 The model response is parsed and validated against Pydantic schemas. Invalid output is not silently coerced into a valid finding; schema errors are surfaced through the domain error path.
