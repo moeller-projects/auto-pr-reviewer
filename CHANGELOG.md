@@ -29,6 +29,8 @@ All notable changes to this project will be documented in this file.
 
 - CRG graph cache now persists across runs: the cold/warm decision is made before the graph store eagerly creates the SQLite file, warm updates receive the PR's changed files instead of an unreliable `HEAD~1` guess, the cache path is keyed by the pinned CRG tool version, and the container image actually ships `code-review-graph` (locked in `uv.lock`, installed via `uv export --extra crg`) with a dedicated `reviewforge-crg-cache` volume mounted at `/workspace/crg-cache`.
 - CRG failures now write `crg-analysis.json` with `status: "failed"`, and truncated analyses surface as `status: "degraded"`.
+- Fixed wave-two API candidates to require surviving source `CALLS` edges, corrected the package flow API usage and entry classification, isolated base snapshots in disposable worktrees/databases, and added exact base-SHA cache reuse evidence.
+- Fixed progressive disclosure staging to expose full `changed-files.json`, register disposable staging paths for cleanup, and keep staged preambles/pointers in chunk 1 only; added skip-path and redaction regression coverage.
 - Chunked `single_pi` reviews now make one in-session synthesis call for model-written whole-PR summaries while preserving programmatic finding/uncertainty merging. If synthesis fails validation or execution, deterministic boilerplate remains a safe fallback and is recorded as `synthesisFallback`.
 - Shallow merge-base resolution now checks repository state before escalating to guarded `--unshallow` fetches and reports every attempted depth when no merge base exists.
 - Added tracked-path convention checks, focused boundary/error coverage, and raised the CI coverage gate to 97%.

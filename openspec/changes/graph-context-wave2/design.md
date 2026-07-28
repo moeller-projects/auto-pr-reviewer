@@ -1,7 +1,30 @@
 # Design
 
-The installed `code-review-graph` package is version 2.3.7 with schema version 9. `graph_diff.take_snapshot(store)` returns node and edge counts plus `nodes` keyed by qualified name (`kind`, `file`, `community_id`) and `edges` keyed by `src->dst:kind`; it does not include function signatures, so this change does not claim signature detection.
+The installed `code-review-graph` package is version 2.3.7 with schema version 9.
+`graph_diff.take_snapshot(store)` returns `node_count`, `edge_count`, a
+`nodes` mapping keyed by qualified name, and an `edges` set of
+`src->dst:kind` strings. Node payloads include kind, file, and community id.
+ReviewForge normalizes the edge set to a deterministic JSON object before
+caching. The snapshot does not include function signatures or a before/after
+source body, so this change detects node/edge additions, removals, and changed
+node metadata only; it does not claim signature-change detection.
 
-The package exposes `detect_entry_points`, `trace_flows`, `compute_criticality`, `get_affected_flows`, `find_hub_nodes`, and `find_bridge_nodes`. Persisted flows are available through `get_flows`; the wave-two implementation also supports recomputation. Community IDs are read from the store. `communities.py` has an igraph-optional networkx/file fallback; missing optional community support degrades the architecture feature and does not add igraph.
+`detect_entry_points`, `trace_flows`, `compute_criticality`, and
+`get_affected_flows` provide flow data. Cached builds call the package's
+normal `full_build`/`incremental_update` APIs without a flow-skipping option.
+Absent flow tables or APIs degrade only the flows section. Entry points are
+classified deterministically as `http handler`, `cli`, `job`, `test`, or
+`other`, then sorted by descending criticality and entry-point name.
 
-A base graph is built in a disposable git worktree and temporary database, then its immutable snapshot is cached by base SHA under `base-snapshots`. Each feature has an isolated exception boundary and duration detail. Snapshot arithmetic is deterministic and capped.
+The source graph remains in the warm per-repository SQLite cache. An API base
+snapshot is built from a detached git worktree and a separate temporary graph
+database, then cached as
+`graph-cache/<repo-slug>/base-snapshots/<base-sha>.json`; neither temporary
+directory is created under the warm cache. Worktree and graph-data paths are
+registered in `RepoState.cleanup_paths` and removed in the build `finally`
+block. Snapshot arithmetic is deterministic and capped at 50 entries.
+
+Architecture facts filter hubs and bridges against changed nodes only.
+Community counts use changed nodes plus incoming `CALLS` callers. The
+code-review-graph community implementation uses its networkx/file fallback
+when igraph is unavailable; this repository does not add igraph.

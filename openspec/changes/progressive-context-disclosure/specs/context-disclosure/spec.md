@@ -52,3 +52,11 @@ The runner MUST expose best-effort per-file reads of `.reviewforge-context/` and
 #### Scenario: Unparseable diagnostics
 - WHEN Pi stderr lacks a recognizable read-tool diagnostic
 - THEN stage details contain `context_file_reads: "unknown"` and the review continues
+
+### Requirement: Chunk prefix ownership
+Chunked single-pi reviews MUST emit the deterministic context-file preamble
+and any section pointers in chunk 1 only; later chunks MUST not repeat them.
+
+#### Scenario: Later chunk
+- WHEN a review has more than one diff chunk
+- THEN chunk 2 and every later chunk contain the chunk diff without a repeated context-file preamble or pointers

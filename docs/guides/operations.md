@@ -60,9 +60,11 @@ With `CRG_ENABLED=1`, the Tree-sitter knowledge graph persists across runs at `C
 
 
 When `GRAPH_API_DIFF=1`, immutable base snapshots are cached under
-`CRG_CACHE_DIR/<repo-id>/crg-<version>/base-snapshots/<base-sha>.json`.
-The first run for a new base SHA pays one disposable worktree graph build;
-reruns reuse the snapshot. `GRAPH_FLOWS=1` and `GRAPH_ARCH=1` add only warm
+`CRG_CACHE_DIR/<repo-slug>/base-snapshots/<base-sha>.json`. The snapshot is
+built from a detached worktree and a separate temporary graph database; the
+warm per-repository SQLite cache is not used for base data. The first run for
+a new base SHA pays that disposable build; reruns reuse the JSON and log
+`CRG base snapshot reused`. `GRAPH_FLOWS=1` and `GRAPH_ARCH=1` add only warm
 Python-side analysis and degrade independently when optional graph data is
 unavailable.
 

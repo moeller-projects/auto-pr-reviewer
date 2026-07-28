@@ -2,9 +2,23 @@
 
 ## Verified runtime facts
 
-- **V1 readable root:** `Dockerfile` sets `WORKDIR /workspace`, and the current `PiCliRunner` passed no `cwd`, so subprocesses inherited `/workspace`. `prepare_repo` creates the disposable checkout below `CLONE_ROOT` (default `/workspace/repo`). The runner enables only `read,grep` with `--no-context-files`; the repository is readable because Pi starts from the workspace and the system prompt directs it to inspect checkout files. Pi is not installed in the host development environment, so Pi's internal path sandbox was not black-box exercised. This change makes the choice deliberate by setting Pi's cwd to the actual checkout before engine calls.
-- **V2 stderr audit:** The repository exposes Pi stderr as decoded line-oriented diagnostics and currently parses only token usage. No installed Pi binary or stable tool-call trace format was available to verify a canonical read-event grammar. The audit therefore recognizes lines containing `read` and `.reviewforge-context/<file>` and returns `unknown` when stderr exposes no parseable read diagnostic. Unknown is observability data, not a review failure.
-- **V3 session/cwd behavior:** Session identity is explicit `--session-id <id>` and is computed independently of cwd. A two-call mocked runner test verifies sequential `run_json` calls retain the same session id while both calls receive the explicit checkout cwd. No real Pi session was available in the host environment.
+- **V1 readable root:** `Dockerfile:47-49` sets `/workspace` as the runtime
+  workdir. `PrepareRepositoryStage` creates the disposable checkout and
+  `ExecuteReasoningEngineStage:28-31` calls `PiCliRunner.set_working_dir` with
+  that checkout. `runner.py:209-213` locks Pi to `read,grep`; the staged
+  directory is therefore readable through the explicit checkout cwd. The host
+  has no installed `pi` binary, so the cwd claim is verified by the
+  subprocess test, not a host Pi run.
+- **V2 stderr audit:** `runner.py:77-90` parses lines containing `read` and
+  `.reviewforge-context/<file>`. No stable Pi tool-event grammar is available
+  in this environment; `_parse_context_file_reads` returns `unknown` when
+  stderr has no parseable diagnostic. `tests/test_context_disclosure.py`
+  exercises both parseable and unparseable stderr.
+- **V3 session/cwd behavior:** `runner.py:202-218` emits one explicit
+  `--session-id` per configured session and `runner.py:272-280` /
+  `333-341` passes the same cwd to review and repair calls. The sequential
+  runner test records two calls and asserts identical session flags and cwd.
+  No real Pi session is available in the host environment.
 
 ## Staging
 
