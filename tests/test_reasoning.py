@@ -992,7 +992,7 @@ class TestCrgPromptInjection:
         assert "truncated" in prefix
 
     def test_subsection_caps_and_deterministic_ordering(self, tmp_path):
-        from reviewforge.reasoning.single_pi import _format_crg_context
+        from reviewforge.pipeline.crg.prompt import build_crg_section
 
         priorities = [
             {"qualified_name": f"mod.p{i}", "file": f"src/p{i}.py", "risk_score": i / 100.0}
@@ -1010,7 +1010,7 @@ class TestCrgPromptInjection:
             impacted_files=impacted,
             test_gaps=gaps,
         )
-        text = _format_crg_context(doc, 1_000_000)
+        text = build_crg_section(doc, 1_000_000)
         lines = text.splitlines()
 
         def section(name: str) -> list[str]:
@@ -1033,20 +1033,20 @@ class TestCrgPromptInjection:
         paths = [line.removeprefix("  - ") for line in section("Impacted files:")]
         assert paths == sorted(paths)
         # Deterministic: same input, same output.
-        assert _format_crg_context(doc, 1_000_000) == text
+        assert build_crg_section(doc, 1_000_000) == text
 
     def test_byte_cap_is_respected(self, tmp_path):
-        from reviewforge.reasoning.single_pi import _format_crg_context
+        from reviewforge.pipeline.crg.prompt import build_crg_section
 
         doc = self._crg_document(summary="x" * 5000)
-        text = _format_crg_context(doc, 256)
+        text = build_crg_section(doc, 256)
         assert len(text.encode("utf-8")) <= 256
         # Multibyte content must not be split mid-codepoint.
         doc = self._crg_document(summary="é" * 500)
-        text = _format_crg_context(doc, 255)
+        text = build_crg_section(doc, 255)
         assert len(text.encode("utf-8")) <= 255
     def test_wave2_context_drops_malformed_entries_and_respects_cap(self):
-        from reviewforge.reasoning.single_pi import _format_wave2_context
+        from reviewforge.pipeline.crg.prompt import build_wave2_section
 
         context = {
             "api_surface": {
@@ -1067,7 +1067,7 @@ class TestCrgPromptInjection:
                 "communities_crossed": 1,
             },
         }
-        text = _format_wave2_context(context, 256)
+        text = build_wave2_section(context, 256)
         assert "pkg.api" in text or "handler" in text or "pkg.hub" in text
         assert len(text.encode("utf-8")) <= 256
 
@@ -1095,19 +1095,19 @@ class TestCrgPromptInjection:
         assert "Deterministic graph context" not in chunk2
 
     def test_empty_analysis_formats_to_empty_string(self):
-        from reviewforge.reasoning.single_pi import _format_crg_context
+        from reviewforge.pipeline.crg.prompt import build_crg_section
 
-        assert _format_crg_context({}, 8192) == ""
+        assert build_crg_section({}, 8192) == ""
 
     def test_affected_flows_are_listed(self):
-        from reviewforge.reasoning.single_pi import _format_crg_context
+        from reviewforge.pipeline.crg.prompt import build_crg_section
 
         doc = self._crg_document(affected_flows=["flow_a", "flow_b"])
-        text = _format_crg_context(doc, 8192)
+        text = build_crg_section(doc, 8192)
         assert "Affected flows: flow_a, flow_b" in text
 
     def test_malformed_entries_are_dropped_not_fatal(self):
-        from reviewforge.reasoning.single_pi import _format_crg_context
+        from reviewforge.pipeline.crg.prompt import build_crg_section
 
         doc = self._crg_document(
             changed_functions=[
@@ -1119,7 +1119,7 @@ class TestCrgPromptInjection:
             review_priorities=[{"qualified_name": "mod.bad", "risk_score": "not-a-number"}],
             risk_score="not-a-number",
         )
-        text = _format_crg_context(doc, 8192)
+        text = build_crg_section(doc, 8192)
         assert "mod.ok" in text
         assert "mod.nonnumeric" in text
         assert "risk=0.00" in text
@@ -1127,11 +1127,12 @@ class TestCrgPromptInjection:
 
     def test_non_positive_cap_disables_injection(self, tmp_path):
         from dataclasses import replace as _replace
-        from reviewforge.reasoning.single_pi import _build_single_pi_prefix, _format_crg_context
+        from reviewforge.reasoning.single_pi import _build_single_pi_prefix
+        from reviewforge.pipeline.crg.prompt import build_crg_section
 
         doc = self._crg_document()
-        assert _format_crg_context(doc, 0) == ""
-        assert _format_crg_context(doc, -5) == ""
+        assert build_crg_section(doc, 0) == ""
+        assert build_crg_section(doc, -5) == ""
         cfg = _replace(_cfg(tmp_path), crg_context_max_bytes=0)
         ctx = _stage_context(cfg, MagicMock())
         baseline = _build_single_pi_prefix(ctx)
@@ -1139,6 +1140,6 @@ class TestCrgPromptInjection:
         assert _build_single_pi_prefix(ctx) == baseline
 
     def test_non_object_analysis_is_ignored(self):
-        from reviewforge.reasoning.single_pi import _format_crg_context
+        from reviewforge.pipeline.crg.prompt import build_crg_section
 
-        assert _format_crg_context(["junk"], 8192) == ""
+        assert build_crg_section(["junk"], 8192) == ""

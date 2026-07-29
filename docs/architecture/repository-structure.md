@@ -6,6 +6,7 @@
   - `cli.py`, `__main__.py`: primary command-line entry points.
   - `config.py`: CLI/env/.env resolution and validation.
   - `pipeline/`: contexts, stages, orchestration, projections, schemas, validation.
+  - `pipeline/crg/`: consolidated CRG stage, analysis, snapshots, flows, architecture, and prompt modules.
   - `reasoning/`: `ReasoningEngine`, `single_pi`, and `multi_stage` implementations.
   - `ai/`: Pi subprocess runner and prompt composition.
   - `ado/`: REST client, helper CLI, diff mapping, comments, voting, and posting.

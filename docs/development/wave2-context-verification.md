@@ -1,4 +1,5 @@
 # CRG wave 2 and progressive context disclosure verification
+> Module layout note: current CRG implementation lives under `src/reviewforge/pipeline/crg/`; the dated paths below are historical audit references.
 
 **Date:** 2026-07-28  
 **Scope:** CRG wave 2 (`GRAPH_API_DIFF`, `GRAPH_FLOWS`, `GRAPH_ARCH`) and progressive `.reviewforge-context` disclosure.  

@@ -1508,7 +1508,7 @@ def _install_fake_crg(
     """Install a fake ``code_review_graph`` package into ``sys.modules``."""
     import types
 
-    import reviewforge.pipeline.stages.enrich_with_crg as stage_mod
+    import reviewforge.pipeline.crg.stage as stage_mod
 
     pkg = types.ModuleType("code_review_graph")
     graph = types.ModuleType("code_review_graph.graph")
@@ -1534,7 +1534,7 @@ def _install_fake_crg(
 
 
 class TestEnrichWithCrgStage:
-    """Tests for :class:`~reviewforge.pipeline.stages.enrich_with_crg.EnrichWithCrgStage`."""
+    """Tests for :class:`~reviewforge.pipeline.crg.stage.EnrichWithCrgStage`."""
 
     def _make_state(self, repo_dir: Path) -> "SimpleNamespace":
         return SimpleNamespace(
@@ -1545,7 +1545,7 @@ class TestEnrichWithCrgStage:
         )
 
     def _run_ctx(self, cfg, artifacts, state):
-        from reviewforge.pipeline.stages.enrich_with_crg import EnrichWithCrgStage
+        from reviewforge.pipeline.crg import EnrichWithCrgStage
 
         ctx = _stage_context(cfg, artifacts, MagicMock(), state=state)
         return EnrichWithCrgStage()(ctx), ctx
@@ -1553,13 +1553,13 @@ class TestEnrichWithCrgStage:
     # --- should_run gate ---
 
     def test_skips_when_crg_disabled(self, cfg, artifacts):
-        from reviewforge.pipeline.stages.enrich_with_crg import EnrichWithCrgStage
+        from reviewforge.pipeline.crg import EnrichWithCrgStage
         ctx = _stage_context(cfg, artifacts, MagicMock())
         stage = EnrichWithCrgStage()
         assert stage.should_run(ctx) is False
 
     def test_skips_when_state_is_none(self, cfg, artifacts):
-        from reviewforge.pipeline.stages.enrich_with_crg import EnrichWithCrgStage
+        from reviewforge.pipeline.crg import EnrichWithCrgStage
         crg_cfg = replace(cfg, crg_enabled=True)
         ctx = _stage_context(crg_cfg, artifacts, MagicMock())
         ctx.state = None
@@ -1567,7 +1567,7 @@ class TestEnrichWithCrgStage:
         assert stage.should_run(ctx) is False
 
     def test_skips_when_review_mode_no_op(self, cfg, artifacts, tmp_path):
-        from reviewforge.pipeline.stages.enrich_with_crg import EnrichWithCrgStage
+        from reviewforge.pipeline.crg import EnrichWithCrgStage
         crg_cfg = replace(cfg, crg_enabled=True)
         ctx = _stage_context(crg_cfg, artifacts, MagicMock(), state=self._make_state(tmp_path))
         ctx.extras["review_state"] = SimpleNamespace(mode="no_op")
@@ -1575,7 +1575,7 @@ class TestEnrichWithCrgStage:
         assert stage.should_run(ctx) is False
 
     def test_should_run_when_enabled_and_state_present(self, cfg, artifacts, tmp_path):
-        from reviewforge.pipeline.stages.enrich_with_crg import EnrichWithCrgStage
+        from reviewforge.pipeline.crg import EnrichWithCrgStage
         crg_cfg = replace(cfg, crg_enabled=True)
         ctx = _stage_context(crg_cfg, artifacts, MagicMock(), state=self._make_state(tmp_path))
         stage = EnrichWithCrgStage()
@@ -1586,7 +1586,7 @@ class TestEnrichWithCrgStage:
     def test_degrades_gracefully_when_package_missing(self, cfg, artifacts, tmp_path, monkeypatch):
         import builtins
 
-        from reviewforge.pipeline.stages.enrich_with_crg import EnrichWithCrgStage
+        from reviewforge.pipeline.crg import EnrichWithCrgStage
 
         crg_cfg = replace(cfg, crg_enabled=True)
         ctx = _stage_context(crg_cfg, artifacts, MagicMock(), state=self._make_state(tmp_path))
@@ -1824,7 +1824,7 @@ class TestEnrichWithCrgStage:
     def test_version_bump_triggers_exactly_one_cold_rebuild(self, cfg, artifacts, tmp_path, monkeypatch):
         """Bumping the CRG version keys a fresh cache dir: one cold rebuild,
         then warm again."""
-        import reviewforge.pipeline.stages.enrich_with_crg as stage_mod
+        import reviewforge.pipeline.crg.stage as stage_mod
 
         calls: list[str] = []
 
@@ -1929,7 +1929,7 @@ class TestEnrichWithCrgStage:
         assert captured["changed_ranges"] is None
 
     def test_artifact_write_failure_still_exposes_extras(self, cfg, artifacts, tmp_path, monkeypatch):
-        import reviewforge.pipeline.stages.enrich_with_crg as stage_mod
+        import reviewforge.pipeline.crg.stage as stage_mod
 
         _install_fake_crg(monkeypatch)
         monkeypatch.setattr(
@@ -1943,7 +1943,7 @@ class TestEnrichWithCrgStage:
         assert ctx.extras["crg_analysis"]["status"] == "ok"
 
     def test_failure_artifact_write_failure_is_swallowed(self, cfg, artifacts, tmp_path, monkeypatch):
-        import reviewforge.pipeline.stages.enrich_with_crg as stage_mod
+        import reviewforge.pipeline.crg.stage as stage_mod
 
         _install_fake_crg(
             monkeypatch,
@@ -1961,7 +1961,7 @@ class TestEnrichWithCrgStage:
     def test_crg_version_fallback_when_distribution_missing(self, monkeypatch):
         from importlib import metadata as importlib_metadata
 
-        import reviewforge.pipeline.stages.enrich_with_crg as stage_mod
+        import reviewforge.pipeline.crg.stage as stage_mod
 
         monkeypatch.setattr(
             importlib_metadata,
