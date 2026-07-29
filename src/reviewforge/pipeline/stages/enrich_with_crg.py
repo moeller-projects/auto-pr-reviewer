@@ -338,7 +338,10 @@ def _write_failure_document(ctx: StageContext, *, tool_version: str | None, erro
         _write_artifact(ctx, document)
     except Exception as exc:  # noqa: BLE001
         log_warning(f"CRG failure artifact write failed ({type(exc).__name__}: {exc})")
-    ctx.artifacts.graph_context.unlink(missing_ok=True)
+    try:
+        ctx.artifacts.graph_context.unlink(missing_ok=True)
+    except Exception as exc:  # noqa: BLE001
+        log_warning(f"CRG graph-context unlink failed ({type(exc).__name__}: {exc})")
     try:
         _write_graph_context(ctx, document)
     except Exception as exc:  # noqa: BLE001

@@ -1632,6 +1632,25 @@ class TestEnrichWithCrgStage:
         graph_written = json.loads(artifacts.graph_context.read_text())
         assert graph_written["status"] == "failed"
 
+    def test_degrades_gracefully_when_graph_context_unlink_fails(
+        self, cfg, artifacts, tmp_path, monkeypatch
+    ):
+        _install_fake_crg(
+            monkeypatch,
+            full_build=MagicMock(side_effect=RuntimeError("simulated graph build error")),
+        )
+        graph_context = MagicMock(wraps=artifacts.graph_context)
+        graph_context.unlink.side_effect = PermissionError("read-only")
+        crg_artifacts = replace(artifacts, graph_context=graph_context)
+        crg_cfg = replace(cfg, crg_enabled=True)
+
+        result, _ = self._run_ctx(crg_cfg, crg_artifacts, self._make_state(tmp_path))
+
+        assert result.status == StageStatus.OK
+        assert result.details.get("crg_status") == "build_failed"
+        graph_context.unlink.assert_called_once_with(missing_ok=True)
+        assert json.loads(crg_artifacts.graph_context.read_text())["status"] == "failed"
+
     # --- graceful-degradation: analysis failure ---
 
     def test_degrades_gracefully_on_analysis_failure(self, cfg, artifacts, tmp_path, monkeypatch):
