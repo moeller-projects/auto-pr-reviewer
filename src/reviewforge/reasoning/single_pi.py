@@ -563,7 +563,7 @@ def _build_chunk_instruction(
     *,
     include_shared_prefix: bool,
 ) -> str:
-    prefix = _build_single_pi_prefix(ctx) if index == 1 else ""
+    prefix = _build_single_pi_prefix(ctx) if include_shared_prefix or index == 1 else ""
     body = (
         f"Review chunk {index}/{total} of the same PR diff. "
         "Return only a JSON object with findings and uncertainties; do not summarize the PR.\n"

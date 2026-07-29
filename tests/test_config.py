@@ -67,7 +67,7 @@ class TestFromSourcesBranches:
 
 class TestFromEnvFile:
     def test_default_path_reads_dotenv_in_cwd(self, tmp_path, monkeypatch):
-        (tmp_path / ".env").write_text("PR_ID=77\n", encoding="utf-8")
+        (tmp_path / ".env").write_text("ADO_AUTH_TOKEN=tok\nPR_ID=77\n", encoding="utf-8")
         monkeypatch.chdir(tmp_path)
         monkeypatch.delenv("PR_ID", raising=False)
 

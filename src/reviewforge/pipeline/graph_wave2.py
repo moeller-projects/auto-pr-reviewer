@@ -72,6 +72,7 @@ def api_surface(base: dict[str, Any], source: dict[str, Any], changed_files: lis
         result["truncated"] = True
     result["breaking_candidates"] = candidates[:50]
     return result
+
 def _flow_kind(flow: dict[str, Any], store: Any | None = None) -> str:
     flow = dict(flow)
     entry_point = flow.get("entry_point") or flow.get("name")

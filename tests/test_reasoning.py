@@ -593,6 +593,11 @@ class TestSinglePiReasoningEngine:
         ctx.extras["wi_context"] = [{"id": 7}]
         ctx.extras["thread_context"] = [{"id": 9}]
         ctx.extras["review_context"] = {"previousFeedback": [{"title": "Old issue"}]}
+        ctx.extras["crg_analysis"] = {
+            "status": "ok",
+            "summary": "deterministic graph context",
+            "risk_score": 0.4,
+        }
         ctx.state.diff_text = (
             "diff --git a/a.py b/a.py\n+@@ -1 +1 @@\n-old\n+new\n"
             "diff --git a/b.py b/b.py\n+@@ -1 +1 @@\n-old\n+new\n"
@@ -606,7 +611,10 @@ class TestSinglePiReasoningEngine:
         assert "Changed files:" in prompts[0]
         assert "Previous review feedback:" in prompts[0]
         assert "Treat fixed findings as addressed, but flag them when reintroduced and set regression=true." in prompts[0]
-        assert "Single-call reasoning review" not in prompts[1]
+        assert "Single-call reasoning review for Azure DevOps PR #42." in prompts[1]
+        assert "Repository/project metadata:" in prompts[1]
+        assert "Changed files:" in prompts[1]
+        assert "Deterministic graph context (Tree-sitter code-review graph):" in prompts[1]
         assert [u.model_dump() for u in result.metrics.chunkTokenUsage] == [
             {"input": 10, "output": 5, "total": 15},
             {"input": 7, "output": 2, "total": 9},
