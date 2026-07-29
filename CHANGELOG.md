@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Changed
 
 - Context sections now keep curated inline summaries and point to complete redacted data staged under `.reviewforge-context/` when staging succeeds; unavailable staging remains a bounded, pointer-free degraded path.
+- CRG internals are consolidated under `reviewforge.pipeline.crg`; shipped configuration, artifact, marker, and stage contracts are unchanged.
 
 ### Added
 
@@ -28,6 +29,7 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - CRG graph cache now persists across runs: the cold/warm decision is made before the graph store eagerly creates the SQLite file, warm updates receive the PR's changed files instead of an unreliable `HEAD~1` guess, the cache path is keyed by the pinned CRG tool version, and the container image actually ships `code-review-graph` (locked in `uv.lock`, installed via `uv export --extra crg`) with a dedicated `reviewforge-crg-cache` volume mounted at `/workspace/crg-cache`.
+- CRG base snapshots are now keyed by the CRG tool version, so a tool upgrade cannot reuse an incompatible snapshot.
 - CRG failures now write `crg-analysis.json` with `status: "failed"`, and truncated analyses surface as `status: "degraded"`.
 - Fixed wave-two API candidates to require surviving source `CALLS` edges, corrected the package flow API usage and entry classification, isolated base snapshots in disposable worktrees/databases, and added exact base-SHA cache reuse evidence.
 - Fixed progressive disclosure staging to expose full `changed-files.json`, register disposable staging paths for cleanup, and keep staged preambles/pointers in chunk 1 only; added skip-path and redaction regression coverage.

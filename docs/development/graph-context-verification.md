@@ -1,4 +1,5 @@
 # Graph-context (CRG) integration — verification report
+> Module layout note: current CRG implementation lives under `src/reviewforge/pipeline/crg/`; the dated paths below are historical audit references.
 
 **Purpose:** record the audit of the CRG integration against the
 implementation plan, the root cause of the cross-run persistence defect, and

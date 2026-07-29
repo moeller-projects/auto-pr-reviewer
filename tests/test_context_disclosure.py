@@ -10,9 +10,9 @@ from reviewforge.config import Config
 from reviewforge.artifacts import manager
 from reviewforge.pipeline.stage import StageContext
 from reviewforge.pipeline.context_staging import stage_context_files
+from reviewforge.pipeline.crg.prompt import build_wave2_section
 from reviewforge.reasoning.single_pi import (
     _byte_cap_with_pointer,
-    _format_wave2_context,
     render_section,
 )
 
@@ -145,7 +145,7 @@ def test_wave_two_pointers_use_nested_keys_and_survive_small_caps():
             "breaking_candidates": [{"symbol": str(i)} for i in range(16)],
         }
     }
-    rendered = _format_wave2_context(context, 4096, Path("/repo"))
+    rendered = build_wave2_section(context, 4096, Path("/repo"))
     assert "key: api_surface.breaking_candidates" in rendered
     capped = _byte_cap_with_pointer("0123456789", 8, ".reviewforge-context/graph-context.json")
     assert len(capped.encode("utf-8")) <= 8
