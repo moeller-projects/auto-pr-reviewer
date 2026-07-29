@@ -6,8 +6,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from ..runlog import warning
-from ..runlog import _SECRET_NAMES
+from ..runlog import SECRET_NAMES, warning
 
 _CONTEXT_DIR = ".reviewforge-context"
 
@@ -23,7 +22,7 @@ _FILE_DESCRIPTIONS = {
 
 
 def _secret_values(ctx: Any) -> tuple[bytes, ...]:
-    values = [os.environ.get(name, "") for name in _SECRET_NAMES]
+    values = [os.environ.get(name, "") for name in SECRET_NAMES]
     values.append(str(getattr(ctx.cfg, "ado_token", "") or ""))
     return tuple(value.encode("utf-8") for value in values if value)
 

@@ -153,8 +153,8 @@ def test_base_snapshot_uses_exact_cache_and_reuses_without_build(monkeypatch, tm
     subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
     base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
 
-    cfg = replace(_cfg(tmp_path), crg_cache_dir=tmp_path / "graph-cache")
-    warm_db = tmp_path / "graph-cache" / "repo" / "crg-2.3.7" / "crg.db"
+    cfg = replace(_cfg(tmp_path), crg_cache_dir=None)
+    warm_db = tmp_path / "artifacts" / "crg-cache" / "repo" / "crg-2.3.7" / "crg.db"
     warm_db.parent.mkdir(parents=True)
     warm_db.write_bytes(b"warm-source-graph")
     warm_bytes = warm_db.read_bytes()
@@ -174,7 +174,7 @@ def test_base_snapshot_uses_exact_cache_and_reuses_without_build(monkeypatch, tm
     monkeypatch.setattr(graph_wave2, "snapshot", lambda _store: {"nodes": {}, "edges": {}})
 
     graph_wave2.build_base_snapshot(ctx, "2.3.7")
-    cache = tmp_path / "graph-cache" / "repo" / "base-snapshots" / f"{base}.json"
+    cache = tmp_path / "artifacts" / "crg-cache" / "repo" / "base-snapshots" / f"{base}.json"
     first_bytes = cache.read_bytes()
     first_mtime = cache.stat().st_mtime_ns
     graph_wave2.build_base_snapshot(ctx, "2.3.7")

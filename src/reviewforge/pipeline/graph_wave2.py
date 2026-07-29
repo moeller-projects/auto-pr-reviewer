@@ -179,7 +179,7 @@ def build_base_snapshot(ctx: Any, tool_version: str) -> dict[str, Any]:
         raise ValueError("base commit unavailable")
     root = Path(
         getattr(ctx.cfg, "crg_cache_dir", None)
-        or ctx.cfg.review_artifact_root / "graph-cache"
+        or ctx.cfg.review_artifact_root / "crg-cache"
     )
     path = root / _safe(getattr(ctx.cfg, "ado_repo_id", "default")) / "base-snapshots" / f"{base}.json"
     path.parent.mkdir(parents=True, exist_ok=True)

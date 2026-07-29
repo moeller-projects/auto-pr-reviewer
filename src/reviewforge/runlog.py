@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 _LOGGER_NAME = "reviewforge"
-_SECRET_NAMES = (
+SECRET_NAMES = (
     "ADO_AUTH_TOKEN",
     "ADO_MCP_AUTH_TOKEN",
     "ADO_API_KEY",
@@ -34,7 +34,7 @@ def _stderr_handler() -> _logging.Handler:
 class _RedactSecrets(_logging.Filter):
     def filter(self, record: _logging.LogRecord) -> bool:
         message = record.getMessage()
-        for name in _SECRET_NAMES:
+        for name in SECRET_NAMES:
             value = os.environ.get(name)
             if value:
                 message = message.replace(value, "***")
@@ -78,4 +78,4 @@ def error(message: str) -> None:
     get_logger().error(f"[review][ERROR] {message}")
 
 
-__all__ = ["configure", "error", "get_logger", "info", "warning"]
+__all__ = ["SECRET_NAMES", "configure", "error", "get_logger", "info", "warning"]
