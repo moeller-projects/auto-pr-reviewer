@@ -248,6 +248,26 @@ class Config:
     #: Session id used by Pi. Defaults to ``pr-{pr_id}-review-{run_id}``
     #: so the same PR reuses state across reruns.
     pi_session_id: str | None = field(default=None, compare=False)
+    # --- CRG context enrichment -------------------------------------------
+    #: When ``True``, run the CRG Tree-sitter enrichment stage between
+    #: PrepareRepository and ExecuteReasoningEngine. Requires the optional
+    #: ``code-review-graph`` package. Any CRG failure degrades gracefully to
+    #: today's behavior with a logged warning — it is never a failure reason.
+    crg_enabled: bool = field(default=False, compare=False)
+    #: Optional override for the CRG graph-cache root. Defaults to
+    #: ``<review_artifact_root>/crg-cache``. Point it at a dedicated
+    #: persistent volume (env ``CRG_CACHE_DIR``) to keep graph DBs off the
+    #: artifact tree.
+    crg_cache_dir: Path | None = field(default=None, compare=False)
+    #: Byte cap for the deterministic graph-context block injected into the
+    #: single-pi prompt prefix (env ``CRG_CONTEXT_MAX_BYTES``). ``0`` disables
+    #: the injection.
+    crg_context_max_bytes: int = field(default=8192, compare=False)
+    #: Optional deterministic CRG wave-two analyses.
+    graph_api_diff: bool = field(default=False, compare=False)
+    graph_flows: bool = field(default=False, compare=False)
+    graph_arch: bool = field(default=False, compare=False)
+    graph_context_max_bytes: int = field(default=12288, compare=False)
 
     # ------------------------------------------------------------------ env --
 
@@ -392,6 +412,17 @@ class Config:
             fast_review=fast_review,
             fast_review_prompt_path=fast_review_prompt_path,
             chunk_synthesis_prompt_path=chunk_synthesis_prompt_path,
+            crg_enabled=is_true(os.getenv("CRG_ENABLED")),
+            crg_cache_dir=Path(os.environ["CRG_CACHE_DIR"]) if os.getenv("CRG_CACHE_DIR") else None,
+            crg_context_max_bytes=require_uint(
+                "CRG_CONTEXT_MAX_BYTES", os.getenv("CRG_CONTEXT_MAX_BYTES", "8192")
+            ),
+            graph_api_diff=is_true(os.getenv("GRAPH_API_DIFF")),
+            graph_flows=is_true(os.getenv("GRAPH_FLOWS")),
+            graph_arch=is_true(os.getenv("GRAPH_ARCH")),
+            graph_context_max_bytes=require_uint(
+                "GRAPH_CONTEXT_MAX_BYTES", os.getenv("GRAPH_CONTEXT_MAX_BYTES", "12288")
+            ),
         )
         return cfg
 
@@ -763,6 +794,17 @@ def _build_from_sources(
         pi_session_enabled=pi_session_enabled,
         pi_session_clear=pi_session_clear,
         debug_intermediates=is_true(cli_or_env("debug_intermediates", "DEBUG_INTERMEDIATES")),
+        crg_enabled=is_true(cli_or_env("crg_enabled", "CRG_ENABLED")),
+        crg_cache_dir=Path(crg_cache_dir_raw) if (crg_cache_dir_raw := cli_or_env("crg_cache_dir", "CRG_CACHE_DIR")) else None,
+        crg_context_max_bytes=require_uint(
+            "CRG_CONTEXT_MAX_BYTES", cli_or_env("crg_context_max_bytes", "CRG_CONTEXT_MAX_BYTES", "8192")
+        ),
+        graph_api_diff=is_true(cli_or_env("graph_api_diff", "GRAPH_API_DIFF")),
+        graph_flows=is_true(cli_or_env("graph_flows", "GRAPH_FLOWS")),
+        graph_arch=is_true(cli_or_env("graph_arch", "GRAPH_ARCH")),
+        graph_context_max_bytes=require_uint(
+            "GRAPH_CONTEXT_MAX_BYTES", cli_or_env("graph_context_max_bytes", "GRAPH_CONTEXT_MAX_BYTES", "12288")
+        ),
     )
 
 

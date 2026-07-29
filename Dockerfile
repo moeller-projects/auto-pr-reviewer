@@ -30,7 +30,7 @@ WORKDIR /app
 # Copying pyproject.toml and uv.lock before the source code lets Docker reuse
 # this layer when only application files change.
 COPY pyproject.toml uv.lock ./
-RUN uv export --format requirements-txt --no-dev --no-emit-project > requirements.txt \
+RUN uv export --format requirements-txt --no-dev --no-emit-project --extra crg > requirements.txt \
  && uv pip install --system --no-cache --break-system-packages -r requirements.txt \
  && rm requirements.txt
 

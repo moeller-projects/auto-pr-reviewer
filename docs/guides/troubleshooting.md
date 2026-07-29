@@ -10,4 +10,6 @@
 - **No posting:** confirm `--dry-run`, `--no-post`, review skip policy, and `run-summary.json` before debugging ADO credentials.
 - **Inline comment not mapped:** file findings require a valid diff mapping; fileless findings are posted as PR-level comments.
 
+- **Model does not drill down:** inspect `context_file_reads` in the `execute_reasoning_engine` details inside `run-summary.json`; `unknown` means Pi stderr did not expose parseable read diagnostics.
+- **No context pointers:** staging is intentionally skipped when the checkout is unavailable or already owns `.reviewforge-context`; inspect `run.log` for the staging warning. Pointers and the preamble are omitted in that path.
 Artifacts and stage records are the first diagnostic source. See [artifacts](../reference/artifacts.md).

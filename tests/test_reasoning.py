@@ -593,6 +593,11 @@ class TestSinglePiReasoningEngine:
         ctx.extras["wi_context"] = [{"id": 7}]
         ctx.extras["thread_context"] = [{"id": 9}]
         ctx.extras["review_context"] = {"previousFeedback": [{"title": "Old issue"}]}
+        ctx.extras["crg_analysis"] = {
+            "status": "ok",
+            "summary": "deterministic graph context",
+            "risk_score": 0.4,
+        }
         ctx.state.diff_text = (
             "diff --git a/a.py b/a.py\n+@@ -1 +1 @@\n-old\n+new\n"
             "diff --git a/b.py b/b.py\n+@@ -1 +1 @@\n-old\n+new\n"
@@ -601,12 +606,15 @@ class TestSinglePiReasoningEngine:
         result = SinglePiReasoningEngine().execute(ctx)
 
         assert len(prompts) == 2
-        for prompt in prompts:
-            assert prompt.startswith("Single-call reasoning review for Azure DevOps PR #42.")
-            assert "Repository/project metadata:" in prompt
-            assert "Changed files:" in prompt
-            assert "Previous review feedback:" in prompt
-            assert "Treat fixed findings as addressed, but flag them when reintroduced and set regression=true." in prompt
+        assert prompts[0].startswith("Single-call reasoning review for Azure DevOps PR #42.")
+        assert "Repository/project metadata:" in prompts[0]
+        assert "Changed files:" in prompts[0]
+        assert "Previous review feedback:" in prompts[0]
+        assert "Treat fixed findings as addressed, but flag them when reintroduced and set regression=true." in prompts[0]
+        assert "Single-call reasoning review for Azure DevOps PR #42." in prompts[1]
+        assert "Repository/project metadata:" in prompts[1]
+        assert "Changed files:" in prompts[1]
+        assert "Deterministic graph context (Tree-sitter code-review graph):" in prompts[1]
         assert [u.model_dump() for u in result.metrics.chunkTokenUsage] == [
             {"input": 10, "output": 5, "total": 15},
             {"input": 7, "output": 2, "total": 9},
@@ -922,3 +930,215 @@ class TestProjection:
         ]
         assert _symbol_files(symbols) == ["x.py", "y.py"]
 
+
+
+class TestCrgPromptInjection:
+    """Regression tests for the deterministic graph-context prompt block."""
+
+    def _crg_document(self, **overrides) -> dict[str, Any]:
+        doc = {
+            "status": "ok",
+            "tool_version": "1.0.0",
+            "build": {"mode": "full", "duration_ms": 10},
+            "summary": "Analyzed 2 files",
+            "risk_score": 0.5,
+            "changed_functions": [],
+            "affected_flows": [],
+            "test_gaps": [],
+            "impacted_files": [],
+            "review_priorities": [],
+        }
+        doc.update(overrides)
+        return doc
+
+    def test_absent_or_failed_analysis_is_byte_identical(self, tmp_path):
+        """Absent/failed graph context must not alter the instruction at all."""
+        from reviewforge.reasoning.single_pi import (
+            _build_single_pi_instruction,
+            _build_single_pi_prefix,
+        )
+
+        ctx = _stage_context(_cfg(tmp_path), MagicMock())
+        baseline_prefix = _build_single_pi_prefix(ctx)
+        baseline_instruction = _build_single_pi_instruction(ctx)
+        assert "graph context" not in baseline_instruction
+
+        for status in ("failed", "unavailable", "degraded-but-junk"):
+            ctx.extras["crg_analysis"] = self._crg_document(status=status)
+            assert _build_single_pi_prefix(ctx) == baseline_prefix
+            assert _build_single_pi_instruction(ctx) == baseline_instruction
+
+        # Junk payloads likewise leave the prompt untouched.
+        for junk in ({}, {"status": "ok"}, None):
+            ctx.extras["crg_analysis"] = junk
+            assert _build_single_pi_prefix(ctx) == baseline_prefix
+
+    def test_ok_analysis_injects_section_before_diff(self, tmp_path):
+        from reviewforge.reasoning.single_pi import _build_single_pi_instruction
+
+        ctx = _stage_context(_cfg(tmp_path), MagicMock())
+        ctx.extras["crg_analysis"] = self._crg_document()
+        instruction = _build_single_pi_instruction(ctx)
+        assert "Deterministic graph context" in instruction
+        assert instruction.index("Deterministic graph context") < instruction.index("Unified diff:")
+
+    def test_degraded_analysis_is_injected_with_truncation_note(self, tmp_path):
+        from reviewforge.reasoning.single_pi import _build_single_pi_prefix
+
+        ctx = _stage_context(_cfg(tmp_path), MagicMock())
+        ctx.extras["crg_analysis"] = self._crg_document(status="degraded")
+        prefix = _build_single_pi_prefix(ctx)
+        assert "Deterministic graph context" in prefix
+        assert "truncated" in prefix
+
+    def test_subsection_caps_and_deterministic_ordering(self, tmp_path):
+        from reviewforge.reasoning.single_pi import _format_crg_context
+
+        priorities = [
+            {"qualified_name": f"mod.p{i}", "file": f"src/p{i}.py", "risk_score": i / 100.0}
+            for i in range(8)
+        ]
+        functions = [
+            {"qualified_name": f"mod.f{i}", "file": f"src/f{i}.py", "risk_score": i / 100.0}
+            for i in range(20)
+        ]
+        impacted = [f"src/z{i}.py" for i in range(40)]
+        gaps = [{"qualified_name": f"mod.g{i}", "file": f"src/g{i}.py"} for i in range(20)]
+        doc = self._crg_document(
+            review_priorities=priorities,
+            changed_functions=functions,
+            impacted_files=impacted,
+            test_gaps=gaps,
+        )
+        text = _format_crg_context(doc, 1_000_000)
+        lines = text.splitlines()
+
+        def section(name: str) -> list[str]:
+            start = lines.index(name) + 1
+            out = []
+            for line in lines[start:]:
+                if not line.startswith("  - "):
+                    break
+                out.append(line)
+            return out
+
+        assert len(section("Review priorities (highest risk first):")) == 5
+        assert len(section("Changed functions (highest risk first):")) == 15
+        assert len(section("Impacted files:")) == 30
+        assert len(section("Functions without test coverage:")) == 15
+        # Risk descending within function lists.
+        assert "mod.p7" in section("Review priorities (highest risk first):")[0]
+        assert "mod.f19" in section("Changed functions (highest risk first):")[0]
+        # Impacted files ascending by path.
+        paths = [line.removeprefix("  - ") for line in section("Impacted files:")]
+        assert paths == sorted(paths)
+        # Deterministic: same input, same output.
+        assert _format_crg_context(doc, 1_000_000) == text
+
+    def test_byte_cap_is_respected(self, tmp_path):
+        from reviewforge.reasoning.single_pi import _format_crg_context
+
+        doc = self._crg_document(summary="x" * 5000)
+        text = _format_crg_context(doc, 256)
+        assert len(text.encode("utf-8")) <= 256
+        # Multibyte content must not be split mid-codepoint.
+        doc = self._crg_document(summary="é" * 500)
+        text = _format_crg_context(doc, 255)
+        assert len(text.encode("utf-8")) <= 255
+    def test_wave2_context_drops_malformed_entries_and_respects_cap(self):
+        from reviewforge.reasoning.single_pi import _format_wave2_context
+
+        context = {
+            "api_surface": {
+                "status": "ok",
+                "breaking_candidates": ["bad", {"symbol": "pkg.api", "caller_count": 2}],
+                "added_nodes": ["pkg.added"],
+                "removed_nodes": ["pkg.removed"],
+            },
+            "flows": {
+                "top": [
+                    {"entry_point": "bad", "criticality": "not-a-number"},
+                    {"entry_point": "handler", "criticality": 0.75},
+                ]
+            },
+            "architecture": {
+                "hubs_touched": ["bad", {"qualified_name": "pkg.hub"}],
+                "bridges_touched": [None, {"qualified_name": "pkg.bridge"}],
+                "communities_crossed": 1,
+            },
+        }
+        text = _format_wave2_context(context, 256)
+        assert "pkg.api" in text or "handler" in text or "pkg.hub" in text
+        assert len(text.encode("utf-8")) <= 256
+
+
+    def test_cfg_byte_cap_flows_into_prefix(self, tmp_path):
+        from dataclasses import replace as _replace
+
+        from reviewforge.reasoning.single_pi import _build_single_pi_prefix
+
+        cfg = _replace(_cfg(tmp_path), crg_context_max_bytes=64)
+        ctx = _stage_context(cfg, MagicMock())
+        ctx.extras["crg_analysis"] = self._crg_document(summary="y" * 1000)
+        prefix = _build_single_pi_prefix(ctx)
+        block = prefix.split("Deterministic graph context (Tree-sitter code-review graph):\n", 1)[1]
+        assert len(block.encode("utf-8")) <= 64
+
+    def test_chunked_prompt_repeats_graph_context_only_with_shared_prefix(self, tmp_path):
+        from reviewforge.reasoning.single_pi import _build_chunk_instruction
+
+        ctx = _stage_context(_cfg(tmp_path), MagicMock())
+        ctx.extras["crg_analysis"] = self._crg_document()
+        chunk1 = _build_chunk_instruction(ctx, "diff --git a/a.py", 1, 2, include_shared_prefix=False)
+        chunk2 = _build_chunk_instruction(ctx, "diff --git a/b.py", 2, 2, include_shared_prefix=False)
+        assert "Deterministic graph context" in chunk1
+        assert "Deterministic graph context" not in chunk2
+
+    def test_empty_analysis_formats_to_empty_string(self):
+        from reviewforge.reasoning.single_pi import _format_crg_context
+
+        assert _format_crg_context({}, 8192) == ""
+
+    def test_affected_flows_are_listed(self):
+        from reviewforge.reasoning.single_pi import _format_crg_context
+
+        doc = self._crg_document(affected_flows=["flow_a", "flow_b"])
+        text = _format_crg_context(doc, 8192)
+        assert "Affected flows: flow_a, flow_b" in text
+
+    def test_malformed_entries_are_dropped_not_fatal(self):
+        from reviewforge.reasoning.single_pi import _format_crg_context
+
+        doc = self._crg_document(
+            changed_functions=[
+                "garbage",
+                {"qualified_name": "mod.ok", "file": "src/ok.py", "risk_score": "high"},
+                None,
+                {"name": "mod.nonnumeric", "file_path": "src/nn.py", "risk_score": "high"},
+            ],
+            review_priorities=[{"qualified_name": "mod.bad", "risk_score": "not-a-number"}],
+            risk_score="not-a-number",
+        )
+        text = _format_crg_context(doc, 8192)
+        assert "mod.ok" in text
+        assert "mod.nonnumeric" in text
+        assert "risk=0.00" in text
+        assert "Overall risk score" not in text
+
+    def test_non_positive_cap_disables_injection(self, tmp_path):
+        from dataclasses import replace as _replace
+        from reviewforge.reasoning.single_pi import _build_single_pi_prefix, _format_crg_context
+
+        doc = self._crg_document()
+        assert _format_crg_context(doc, 0) == ""
+        assert _format_crg_context(doc, -5) == ""
+        cfg = _replace(_cfg(tmp_path), crg_context_max_bytes=0)
+        ctx = _stage_context(cfg, MagicMock())
+        baseline = _build_single_pi_prefix(ctx)
+        ctx.extras["crg_analysis"] = doc
+        assert _build_single_pi_prefix(ctx) == baseline
+
+    def test_non_object_analysis_is_ignored(self):
+        from reviewforge.reasoning.single_pi import _format_crg_context
+
+        assert _format_crg_context(["junk"], 8192) == ""

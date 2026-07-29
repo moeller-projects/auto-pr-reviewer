@@ -17,6 +17,7 @@ from .build_artifacts import BuildArtifactsStage
 from .calibrate_severity import CalibrateSeverityStage
 from .collect_context import CollectContextStage
 from .context_digest import ContextDigestStage
+from .enrich_with_crg import EnrichWithCrgStage
 from .execute_reasoning_engine import ExecuteReasoningEngineStage
 from .detect_review_mode import DetectReviewModeStage
 from .fetch_pr_metadata import FetchPrMetadataStage
@@ -31,6 +32,7 @@ from .validate_anchors import ValidateAnchorsStage
 DEFAULT_PIPELINE: list = [
     FetchPrMetadataStage(),
     PrepareRepositoryStage(),
+    EnrichWithCrgStage(),
     ExecuteReasoningEngineStage(),
     ValidateAnchorsStage(),
     PostToAdoStage(),
@@ -41,6 +43,7 @@ DEFAULT_PIPELINE: list = [
 REVIEW_ONLY_PIPELINE: list = [
     FetchPrMetadataStage(),
     PrepareRepositoryStage(),
+    EnrichWithCrgStage(),
     ExecuteReasoningEngineStage(),
     ValidateAnchorsStage(),
 ]
@@ -56,6 +59,7 @@ POST_ONLY_PIPELINE: list = [
 FAST_REVIEW_PIPELINE: list = [
     FetchPrMetadataStage(),
     PrepareRepositoryStage(),
+    EnrichWithCrgStage(),
     ExecuteReasoningEngineStage(),
     ValidateAnchorsStage(),
     PostToAdoStage(),
@@ -64,6 +68,7 @@ FAST_REVIEW_PIPELINE: list = [
 FAST_REVIEW_REVIEW_ONLY_PIPELINE: list = [
     FetchPrMetadataStage(),
     PrepareRepositoryStage(),
+    EnrichWithCrgStage(),
     ExecuteReasoningEngineStage(),
     ValidateAnchorsStage(),
 ]
@@ -75,6 +80,7 @@ __all__ = [
     "CollectContextStage",
     "DetectReviewModeStage",
     "DEFAULT_PIPELINE",
+    "EnrichWithCrgStage",
     "ExecuteReasoningEngineStage",
     "FAST_REVIEW_PIPELINE",
     "FAST_REVIEW_REVIEW_ONLY_PIPELINE",

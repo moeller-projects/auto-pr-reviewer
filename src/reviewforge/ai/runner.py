@@ -50,6 +50,10 @@ _TOKEN_RE = re.compile(
     re.IGNORECASE,
 )
 
+#: Best-effort extraction of Pi read-tool paths from stderr diagnostics.
+_CONTEXT_PATH_RE = re.compile(r"\.reviewforge-context/(?P<file>[A-Za-z0-9._/-]+)", re.IGNORECASE)
+_READ_TOOL_RE = re.compile(r"\bread\b", re.IGNORECASE)
+
 
 def strip_json_fences(path: Path) -> None:
     """Remove Markdown code fences from a JSON file in place.
@@ -64,15 +68,26 @@ def strip_json_fences(path: Path) -> None:
     ]
     path.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
 
-
-
-
-
-
 def _scrub_ado_env(env: dict[str, str]) -> None:
     """Remove ADO credentials from the subprocess env in place."""
     for key in ("ADO_AUTH_TOKEN", "ADO_MCP_AUTH_TOKEN", "ADO_API_KEY"):
         env.pop(key, None)
+
+
+def _parse_context_file_reads(stderr_text: str) -> dict[str, int] | str:
+    """Count readable-root context files mentioned by Pi read diagnostics."""
+    if not stderr_text:
+        return "unknown"
+    saw_read_diagnostic = False
+    counts: dict[str, int] = {}
+    for line in stderr_text.splitlines():
+        if not _READ_TOOL_RE.search(line):
+            continue
+        saw_read_diagnostic = True
+        for match in _CONTEXT_PATH_RE.finditer(line):
+            name = f".reviewforge-context/{match.group('file').rstrip('.,;:)]')}"
+            counts[name] = counts.get(name, 0) + 1
+    return counts if saw_read_diagnostic else "unknown"
 
 
 def _default_session_id(cfg: Config) -> str:
@@ -92,6 +107,8 @@ class PiCliRunner:
         self._token_usage_source = "none"
         self._invocation_count = 0
         self._repair_invocation_count = 0
+        self._working_dir: Path | None = None
+        self._context_file_reads: dict[str, int] | str = {}
         # Per-runner cache of source prompt path → augmented prompt path.
         # The augmented copy has the LANGUAGE directive appended so every
         # stage (review, verify, severity, intent, plan, digest) instructs
@@ -123,6 +140,27 @@ class PiCliRunner:
     @property
     def repair_invocation_count(self) -> int:
         return self._repair_invocation_count
+
+
+    @property
+    def context_file_reads(self) -> dict[str, int] | str:
+        """Best-effort counts of staged context files read by Pi."""
+        if isinstance(self._context_file_reads, dict):
+            return dict(self._context_file_reads)
+        return self._context_file_reads
+
+    def set_working_dir(self, path: Path | None) -> None:
+        """Set the explicit cwd used by review and repair subprocesses."""
+        self._working_dir = Path(path) if path else None
+
+    def _record_context_reads(self, reads: dict[str, int] | str) -> None:
+        if reads == "unknown":
+            self._context_file_reads = "unknown"
+            return
+        if self._context_file_reads == "unknown":
+            return
+        for path, count in reads.items():
+            self._context_file_reads[path] = self._context_file_reads.get(path, 0) + count
 
     def _record_tokens(self, tokens: dict[str, int]) -> None:
         self._last_tokens = dict(tokens)
@@ -238,6 +276,7 @@ class PiCliRunner:
                 stderr=subprocess.PIPE,
                 timeout=self.cfg.pi_timeout_secs,
                 env=env,
+                **({"cwd": str(self._working_dir)} if self._working_dir else {}),
             )
         except subprocess.TimeoutExpired:
             raise PiExecutionError(
@@ -247,6 +286,7 @@ class PiCliRunner:
         stderr_text = cp.stderr.decode(errors="replace")
         for line in stderr_text.splitlines():
             _log(f"[pi {stage}] {line}")
+        self._record_context_reads(_parse_context_file_reads(stderr_text))
         self._record_tokens(self._parse_token_usage(stderr_text))
         if cp.returncode:
             raise PiExecutionError(
@@ -297,6 +337,7 @@ class PiCliRunner:
                 stderr=subprocess.PIPE,
                 timeout=self.cfg.pi_timeout_secs,
                 env=env,
+                **({"cwd": str(self._working_dir)} if self._working_dir else {}),
             )
         except subprocess.TimeoutExpired:
             raise PiExecutionError(
@@ -306,6 +347,7 @@ class PiCliRunner:
         stderr_text = cp.stderr.decode(errors="replace")
         for line in stderr_text.splitlines():
             _log(f"[pi {stage} repair] {line}")
+        self._record_context_reads(_parse_context_file_reads(stderr_text))
         self._record_tokens(self._parse_token_usage(stderr_text))
         if cp.returncode or not cp.stdout:
             raise PiExecutionError(

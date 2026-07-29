@@ -25,6 +25,11 @@ test = [
     "pytest-cov>=4.1",
     "pydantic>=2.5",
 ]
+crg = [
+    # Pinned exactly: the CRG cache directory is keyed by this version, and a
+    # floating range would silently change warm-cache behavior between builds.
+    "code-review-graph==2.3.7",
+]
 
 [project.scripts]
 reviewforge = "reviewforge.cli:main"

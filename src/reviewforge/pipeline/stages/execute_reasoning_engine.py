@@ -7,8 +7,6 @@ from ...artifacts.builder import write_json
 from ...reasoning.engine import get_engine
 from ... import __version__
 from ...runlog import warning
-from ...artifacts.builder import write_json
-from ...reasoning.engine import get_engine
 from ..projection import review_result_to_final_doc
 from ..review_state import filter_dismissed_findings
 from ..sarif import review_result_to_sarif
@@ -25,6 +23,10 @@ class ExecuteReasoningEngineStage(Stage):
         return getattr(ctx.extras.get("review_state"), "mode", None) != "no_op"
 
     def run(self, ctx: StageContext) -> dict[str, Any]:
+        set_working_dir = getattr(ctx.pi, "set_working_dir", None)
+        repo_dir = getattr(ctx.state, "repo_dir", None)
+        if callable(set_working_dir):
+            set_working_dir(repo_dir)
         engine = get_engine(ctx.cfg.reasoning_engine, ctx.cfg)
         result = engine.execute(ctx)
         feedback = getattr(ctx.extras.get("review_state"), "feedback", ())
@@ -59,6 +61,9 @@ class ExecuteReasoningEngineStage(Stage):
             "final_findings": str(ctx.artifacts.final),
             "metrics": result.metrics.model_dump(by_alias=True, exclude_none=False),
         }
+        context_file_reads = getattr(ctx.pi, "context_file_reads", None)
+        if isinstance(context_file_reads, (dict, str)):
+            details["context_file_reads"] = context_file_reads
         if ctx.extras.get("_synthesis_fallback"):
             details["synthesisFallback"] = True
         if isinstance(fragment_counts, dict):

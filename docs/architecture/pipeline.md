@@ -6,10 +6,12 @@
 
 Pipelines declared in `pipeline/stages/__init__.py`:
 
-- `DEFAULT_PIPELINE`: `FetchPrMetadataStage` -> `PrepareRepositoryStage` -> `ExecuteReasoningEngineStage` -> `ValidateAnchorsStage` -> `PostToAdoStage`.
+- `DEFAULT_PIPELINE`: `FetchPrMetadataStage` -> `PrepareRepositoryStage` -> `EnrichWithCrgStage` -> `ExecuteReasoningEngineStage` -> `ValidateAnchorsStage` -> `PostToAdoStage`.
 - `REVIEW_ONLY_PIPELINE`: the same sequence without posting.
 - `POST_ONLY_PIPELINE`: `FetchPrMetadataStage` -> `PostToAdoStage`.
-- `FAST_REVIEW_PIPELINE` and `FAST_REVIEW_REVIEW_ONLY_PIPELINE`: compatibility aliases for the corresponding current lists.
+- `FAST_REVIEW_PIPELINE` and `FAST_REVIEW_REVIEW_ONLY_PIPELINE`: compatibility entry points mirroring the corresponding current lists.
+
+`EnrichWithCrgStage` is always registered but self-skips unless `CRG_ENABLED` is set and the review mode is not `no_op`. `PrepareRepositoryStage` writes the diff, changed-file list, and commits before staging complete deterministic copies under the checkout's `.reviewforge-context/`; CRG refreshes the graph copy after its current artifact is written. It builds (or incrementally updates) a Tree-sitter knowledge graph, writes `crg-analysis.json`, and writes the additive `graph-context.json`. `GRAPH_API_DIFF`, `GRAPH_FLOWS`, and `GRAPH_ARCH` independently enable base snapshot diffing, critical-flow context, and hub/bridge architecture context. Each feature records an independent status and duration, degrades independently, and never fails the review.
 
 The selected engine owns Pi-driven reasoning. The physical pipeline owns metadata, repository preparation, materialization, projection, and posting. `run_full`, `run_review_only`, and `run_post_only` create artifacts, run the relevant list, write `run-summary.json`, and return `RunOutcome`.
 

@@ -97,6 +97,50 @@ class TestRunCommand:
         assert "--network" in command and "bridge" in command
         Path(_env_file).unlink(missing_ok=True)
 
+    def test_crg_cache_volume_and_env_reach_container(self, tmp_path, monkeypatch):
+        """The persistent CRG cache must live on its own mounted volume."""
+        monkeypatch.setenv("PI_AUTH_JSON_PATH", str(tmp_path / "missing-auth.json"))
+        monkeypatch.delenv("REVIEW_CRG_CACHE_VOLUME_NAME", raising=False)
+        args = _run_args(tmp_path, "--runtime", "docker")
+
+        command, _env_file, _temporary = ops.run_command(args)
+
+        assert "reviewforge-crg-cache:/workspace/crg-cache" in command
+        assert "CRG_CACHE_DIR=/workspace/crg-cache" in command
+        Path(_env_file).unlink(missing_ok=True)
+
+    def test_crg_cache_volume_name_is_overridable(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PI_AUTH_JSON_PATH", str(tmp_path / "missing-auth.json"))
+        monkeypatch.setenv("REVIEW_CRG_CACHE_VOLUME_NAME", "custom-crg")
+        args = _run_args(tmp_path, "--runtime", "docker")
+
+        command, _env_file, _temporary = ops.run_command(args)
+
+        assert "custom-crg:/workspace/crg-cache" in command
+        Path(_env_file).unlink(missing_ok=True)
+
+    def test_cache_dir_from_env_file_is_mounted_at_same_path(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PI_AUTH_JSON_PATH", str(tmp_path / "missing-auth.json"))
+        (tmp_path / ".env").write_text("CRG_CACHE_DIR=/custom/cache\n", encoding="utf-8")
+        args = _run_args(tmp_path, "--runtime", "docker")
+
+        command, _env_file, _temporary = ops.run_command(args)
+
+        assert "reviewforge-crg-cache:/custom/cache" in command
+        assert "CRG_CACHE_DIR=/custom/cache" in command
+        Path(_env_file).unlink(missing_ok=True)
+
+    def test_cache_dir_from_host_env_is_mounted_at_same_path(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PI_AUTH_JSON_PATH", str(tmp_path / "missing-auth.json"))
+        monkeypatch.setenv("CRG_CACHE_DIR", "/host-selected/cache")
+        args = _run_args(tmp_path, "--runtime", "docker")
+
+        command, _env_file, _temporary = ops.run_command(args)
+
+        assert "reviewforge-crg-cache:/host-selected/cache" in command
+        assert "CRG_CACHE_DIR=/host-selected/cache" in command
+        Path(_env_file).unlink(missing_ok=True)
+
 
 class TestRedactCommand:
     def test_secret_values_are_masked(self):
