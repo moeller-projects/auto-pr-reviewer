@@ -3,6 +3,7 @@
 - [x] 1.1 Pre-create the non-root Pi agent directory in the runtime image.
 - [x] 1.2 Mount host authentication at the non-root path read-only.
 - [x] 1.3 Guard Docker BuildKit and Podman build capability before builds.
+- [x] 1.4 Preserve build dry-run previews without capability probes.
 
 ## 2. Documentation and Tests
 

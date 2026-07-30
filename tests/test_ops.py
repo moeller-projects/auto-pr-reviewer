@@ -85,6 +85,41 @@ class TestBuildCapability:
             ops._assert_build_capable("podman")
 
 
+
+    def test_cmd_build_skips_capability_probe_for_dry_run(self, monkeypatch):
+        args = ops.parser().parse_args(["build", "--runtime", "docker", "--dry-run"])
+        executed: list[tuple[list[str], bool]] = []
+        monkeypatch.setattr(
+            ops,
+            "_assert_build_capable",
+            lambda _runtime: pytest.fail("dry-run must not probe runtime capability"),
+        )
+        monkeypatch.setattr(
+            ops,
+            "_execute",
+            lambda command, preview: executed.append((command, preview)) or 0,
+        )
+
+        assert ops.cmd_build(args) == 0
+        assert executed and executed[0][0][:2] == ["docker", "build"]
+        assert executed[0][1] is True
+
+    def test_cmd_build_checks_capability_before_real_build(self, monkeypatch):
+        args = ops.parser().parse_args(["build", "--runtime", "docker"])
+        checked: list[str] = []
+        executed: list[tuple[list[str], bool]] = []
+        monkeypatch.setattr(ops, "_assert_build_capable", checked.append)
+        monkeypatch.setattr(
+            ops,
+            "_execute",
+            lambda command, preview: executed.append((command, preview)) or 0,
+        )
+
+        assert ops.cmd_build(args) == 0
+        assert checked == ["docker"]
+        assert executed and executed[0][1] is False
+
+
 class TestEnvFile:
     def test_existing_file_used_as_is(self, tmp_path):
         env = tmp_path / ".env"

@@ -93,7 +93,6 @@ def build_command(args: argparse.Namespace) -> list[str]:
     pi_version = _value(getattr(args, "pi_version", None), "PI_VERSION", pins["PI_VERSION"])
     uv_version = _value(getattr(args, "uv_version", None), "UV_VERSION", pins["UV_VERSION"])
     selected_runtime = runtime(args.runtime)
-    _assert_build_capable(selected_runtime)
     return [
         selected_runtime, "build", "--build-arg", f"PI_VERSION={pi_version}",
         "--build-arg", f"UV_VERSION={uv_version}", "-t", image, str(ROOT),
@@ -198,7 +197,10 @@ def _execute(command: list[str], preview: bool) -> int:
 
 
 def cmd_build(args: argparse.Namespace) -> int:
-    return _execute(build_command(args), args.dry_run)
+    command = build_command(args)
+    if not args.dry_run:
+        _assert_build_capable(command[0])
+    return _execute(command, args.dry_run)
 
 
 def cmd_run(args: argparse.Namespace) -> int:

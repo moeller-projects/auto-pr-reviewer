@@ -28,3 +28,10 @@ cache and bind mounts before invoking the image build.
 - **WHEN** Podman is selected for an image build
 - **THEN** the operation MUST require Podman 4.0 or newer and set
   `BUILDAH_FORMAT=docker` before invoking the build
+
+#### Scenario: Build command preview
+
+- **WHEN** an operator invokes `build --dry-run` with an explicitly selected
+  runtime that is unavailable or lacks BuildKit support
+- **THEN** the operation MUST print the build command without probing runtime
+  capabilities or invoking the build

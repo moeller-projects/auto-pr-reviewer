@@ -1448,11 +1448,6 @@ class TestPlatformOperations:
         from reviewforge import ops
 
         monkeypatch.setattr(ops, "runtime", lambda explicit: explicit)
-        monkeypatch.setattr(
-            ops.subprocess,
-            "run",
-            lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "", ""),
-        )
         command = ops.build_command(
             ops.parser().parse_args(["build", "--runtime", "docker", "--dry-run"])
         )
