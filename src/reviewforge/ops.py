@@ -84,7 +84,7 @@ def _assert_build_capable(selected_runtime: str) -> None:
                 "Dockerfile's cache/bind mounts."
             )
         # buildah only honours RUN --mount in docker format.
-        os.environ.setdefault("BUILDAH_FORMAT", "docker")
+        os.environ["BUILDAH_FORMAT"] = "docker"
 
 
 def build_command(args: argparse.Namespace) -> list[str]:

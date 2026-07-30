@@ -56,8 +56,8 @@ class TestBuildCapability:
         with pytest.raises(RuntimeError, match="'docker buildx' is unavailable"):
             ops._assert_build_capable("docker")
 
-    def test_podman_requires_version_and_sets_docker_format(self, monkeypatch):
-        monkeypatch.delenv("BUILDAH_FORMAT", raising=False)
+    def test_podman_requires_version_and_overrides_format(self, monkeypatch):
+        monkeypatch.setenv("BUILDAH_FORMAT", "oci")
         monkeypatch.setattr(
             ops.subprocess,
             "run",
