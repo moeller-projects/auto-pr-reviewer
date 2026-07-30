@@ -71,9 +71,11 @@ RUN apt-get update \
 # Non-root runtime: the container clones with credentials and executes an
 # LLM-driven agent -- it should not run as root. Named volumes
 # (reviewforge-artifacts, reviewforge-crg-cache) inherit these ownerships.
+# /home/review/.pi/agent is pre-created so the auth.json bind mount lands in
+# a directory Pi (HOME=/home/review) can actually read and write sessions to.
 RUN useradd --uid 10001 --create-home review \
- && mkdir -p /workspace/artifacts /workspace/crg-cache \
- && chown -R review:review /workspace
+ && mkdir -p /workspace/artifacts /workspace/crg-cache /home/review/.pi/agent \
+ && chown -R review:review /workspace /home/review/.pi
 
 # Pi CLI (self-contained prefix from the build stage) and the Python venv.
 COPY --from=build /opt/pi /opt/pi
@@ -102,7 +104,8 @@ WORKDIR /workspace
 RUN python3 -c "import reviewforge, code_review_graph" \
  && pi --version \
  && git --version && rg --version \
- && test -f /app/prompts/fast-review-system.md
+ && test -f /app/prompts/fast-review-system.md \
+ && test -d /home/review/.pi/agent
 
 ENTRYPOINT ["/app/.venv/bin/python", "-m", "reviewforge"]
 # Default subcommand when the image is run with no extra args. Overridden by

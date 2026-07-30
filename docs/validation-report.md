@@ -15,8 +15,8 @@
 - Schema names and literal values were copied from `pipeline/schemas.py`.
 - Documentation contract check found 33 Markdown files and purpose tags on all generated docs.
 - Stage test module `.venv/bin/pytest tests/test_stages.py -q` passed.
-- Full `uv run pytest tests/ --disable-warnings` passed: 820 passed, 1 skipped.
-- Coverage gate passed: `uv run pytest tests/ --cov=reviewforge --cov-fail-under=97` reported 97.13% total coverage.
+- Full `uv run pytest tests/ --disable-warnings` passed: 904 passed, 1 skipped.
+- Coverage gate passed: `uv run pytest tests/ --cov=reviewforge --cov-fail-under=97` reported 97.03% total coverage.
 
 ## Scope limits
 

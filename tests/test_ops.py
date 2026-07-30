@@ -40,6 +40,51 @@ class TestRuntime:
             ops.runtime(None)
 
 
+class TestBuildCapability:
+    def test_docker_buildkit_disabled_fails_before_probe(self, monkeypatch):
+        monkeypatch.setenv("DOCKER_BUILDKIT", "0")
+        with pytest.raises(RuntimeError, match="DOCKER_BUILDKIT=0 disables BuildKit"):
+            ops._assert_build_capable("docker")
+
+    def test_docker_requires_buildx(self, monkeypatch):
+        monkeypatch.delenv("DOCKER_BUILDKIT", raising=False)
+        monkeypatch.setattr(
+            ops.subprocess,
+            "run",
+            lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 1, "", ""),
+        )
+        with pytest.raises(RuntimeError, match="'docker buildx' is unavailable"):
+            ops._assert_build_capable("docker")
+
+    def test_podman_requires_version_and_sets_docker_format(self, monkeypatch):
+        monkeypatch.delenv("BUILDAH_FORMAT", raising=False)
+        monkeypatch.setattr(
+            ops.subprocess,
+            "run",
+            lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "4.9.0\n", ""),
+        )
+        ops._assert_build_capable("podman")
+        assert ops.os.environ["BUILDAH_FORMAT"] == "docker"
+
+    def test_podman_rejects_old_version(self, monkeypatch):
+        monkeypatch.setattr(
+            ops.subprocess,
+            "run",
+            lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "3.4.0\n", ""),
+        )
+        with pytest.raises(RuntimeError, match="podman >= 4.0"):
+            ops._assert_build_capable("podman")
+
+    def test_podman_rejects_unparseable_version(self, monkeypatch):
+        monkeypatch.setattr(
+            ops.subprocess,
+            "run",
+            lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "unknown\n", ""),
+        )
+        with pytest.raises(RuntimeError, match="podman >= 4.0"):
+            ops._assert_build_capable("podman")
+
+
 class TestEnvFile:
     def test_existing_file_used_as_is(self, tmp_path):
         env = tmp_path / ".env"

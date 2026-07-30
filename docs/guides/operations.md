@@ -71,3 +71,21 @@ unavailable.
 ## Progressive context disclosure
 
 There is nothing new to operate. `.reviewforge-context/` is created inside the disposable repository checkout, refreshed during the run, and removed with that checkout. It is not an artifact-volume cache or an operator-managed directory.
+
+## Non-root container runtime (uid 10001)
+
+The review container runs as user `review` (uid 10001), not root. Named
+volumes (`reviewforge-artifacts`, `reviewforge-crg-cache`) work out of the
+box — Docker initializes them with the image's directory ownership.
+
+If you bind-mount **host directories** instead (e.g. `--artifact-path`), the
+host directory must be writable by uid 10001:
+
+    sudo chown -R 10001:10001 /path/to/artifacts
+
+A permission-denied error on the first artifact write is the signature of a
+host directory still owned by another uid.
+
+Build requirements: the Dockerfile uses BuildKit cache/bind mounts. Docker
+>= 23.0 (default BuildKit) or podman >= 4.0 with `BUILDAH_FORMAT=docker` is
+required; `python -m reviewforge.ops build` checks this and fails with a clear message.
