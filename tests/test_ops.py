@@ -40,6 +40,86 @@ class TestRuntime:
             ops.runtime(None)
 
 
+class TestBuildCapability:
+    def test_docker_buildkit_disabled_fails_before_probe(self, monkeypatch):
+        monkeypatch.setenv("DOCKER_BUILDKIT", "0")
+        with pytest.raises(RuntimeError, match="DOCKER_BUILDKIT=0 disables BuildKit"):
+            ops._assert_build_capable("docker")
+
+    def test_docker_requires_buildx(self, monkeypatch):
+        monkeypatch.delenv("DOCKER_BUILDKIT", raising=False)
+        monkeypatch.setattr(
+            ops.subprocess,
+            "run",
+            lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 1, "", ""),
+        )
+        with pytest.raises(RuntimeError, match="'docker buildx' is unavailable"):
+            ops._assert_build_capable("docker")
+
+    def test_podman_requires_version_and_overrides_format(self, monkeypatch):
+        monkeypatch.setenv("BUILDAH_FORMAT", "oci")
+        monkeypatch.setattr(
+            ops.subprocess,
+            "run",
+            lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "4.9.0\n", ""),
+        )
+        ops._assert_build_capable("podman")
+        assert ops.os.environ["BUILDAH_FORMAT"] == "docker"
+
+    def test_podman_rejects_old_version(self, monkeypatch):
+        monkeypatch.setattr(
+            ops.subprocess,
+            "run",
+            lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "3.4.0\n", ""),
+        )
+        with pytest.raises(RuntimeError, match="podman >= 4.0"):
+            ops._assert_build_capable("podman")
+
+    def test_podman_rejects_unparseable_version(self, monkeypatch):
+        monkeypatch.setattr(
+            ops.subprocess,
+            "run",
+            lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "unknown\n", ""),
+        )
+        with pytest.raises(RuntimeError, match="podman >= 4.0"):
+            ops._assert_build_capable("podman")
+
+
+
+    def test_cmd_build_skips_capability_probe_for_dry_run(self, monkeypatch):
+        args = ops.parser().parse_args(["build", "--runtime", "docker", "--dry-run"])
+        executed: list[tuple[list[str], bool]] = []
+        monkeypatch.setattr(
+            ops,
+            "_assert_build_capable",
+            lambda _runtime: pytest.fail("dry-run must not probe runtime capability"),
+        )
+        monkeypatch.setattr(
+            ops,
+            "_execute",
+            lambda command, preview: executed.append((command, preview)) or 0,
+        )
+
+        assert ops.cmd_build(args) == 0
+        assert executed and executed[0][0][:2] == ["docker", "build"]
+        assert executed[0][1] is True
+
+    def test_cmd_build_checks_capability_before_real_build(self, monkeypatch):
+        args = ops.parser().parse_args(["build", "--runtime", "docker"])
+        checked: list[str] = []
+        executed: list[tuple[list[str], bool]] = []
+        monkeypatch.setattr(ops, "_assert_build_capable", checked.append)
+        monkeypatch.setattr(
+            ops,
+            "_execute",
+            lambda command, preview: executed.append((command, preview)) or 0,
+        )
+
+        assert ops.cmd_build(args) == 0
+        assert checked == ["docker"]
+        assert executed and executed[0][1] is False
+
+
 class TestEnvFile:
     def test_existing_file_used_as_is(self, tmp_path):
         env = tmp_path / ".env"

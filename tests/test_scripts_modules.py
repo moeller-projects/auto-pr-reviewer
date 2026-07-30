@@ -1507,7 +1507,7 @@ class TestPlatformOperations:
         command, returned_env_file, temporary = ops.run_command(args)
         assert returned_env_file == str(env_file.resolve())
         assert not temporary
-        assert f"{auth_json.resolve().as_posix()}:/root/.pi/agent/auth.json" in command
+        assert f"{auth_json.resolve().as_posix()}:/home/review/.pi/agent/auth.json:ro" in command
 
 
     def test_batch_discovery_spawns_one_container_per_matching_pr(self, monkeypatch):

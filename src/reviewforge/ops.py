@@ -47,13 +47,54 @@ def runtime(explicit: str | None = None) -> str:
     raise RuntimeError("[review][ERROR] neither docker nor podman found on PATH")
 
 
+def _assert_build_capable(selected_runtime: str) -> None:
+    """Fail loudly before a build that requires BuildKit cache/bind mounts.
+
+    The Dockerfile uses RUN --mount=type=cache|bind, which needs BuildKit
+    (docker) or a recent buildah in docker format (podman). Without this
+    guard the failure surfaces as a cryptic Dockerfile parse error.
+    """
+    if selected_runtime == "docker":
+        if os.environ.get("DOCKER_BUILDKIT") == "0":
+            raise RuntimeError(
+                "[review][ERROR] DOCKER_BUILDKIT=0 disables BuildKit, which the "
+                "Dockerfile requires (cache/bind mounts). Unset it or set "
+                "DOCKER_BUILDKIT=1."
+            )
+        probe = subprocess.run(
+            ["docker", "buildx", "version"], capture_output=True, text=True, check=False
+        )
+        if probe.returncode != 0:
+            raise RuntimeError(
+                "[review][ERROR] 'docker buildx' is unavailable. Install Docker >= 23.0 "
+                "(BuildKit is required for the Dockerfile's cache/bind mounts)."
+            )
+    else:  # podman
+        probe = subprocess.run(
+            ["podman", "version", "--format", "{{.Client.Version}}"],
+            capture_output=True, text=True, check=False,
+        )
+        try:
+            major = int((probe.stdout.strip() or "0").split(".")[0])
+        except ValueError:
+            major = 0
+        if probe.returncode != 0 or major < 4:
+            raise RuntimeError(
+                "[review][ERROR] podman >= 4.0 (buildah >= 1.24) is required for the "
+                "Dockerfile's cache/bind mounts."
+            )
+        # buildah only honours RUN --mount in docker format.
+        os.environ["BUILDAH_FORMAT"] = "docker"
+
+
 def build_command(args: argparse.Namespace) -> list[str]:
     pins = load_pins(Path(args.pin_file))
     image = _value(args.image, "IMAGE_NAME", "reviewforge:latest")
     pi_version = _value(getattr(args, "pi_version", None), "PI_VERSION", pins["PI_VERSION"])
     uv_version = _value(getattr(args, "uv_version", None), "UV_VERSION", pins["UV_VERSION"])
+    selected_runtime = runtime(args.runtime)
     return [
-        runtime(args.runtime), "build", "--build-arg", f"PI_VERSION={pi_version}",
+        selected_runtime, "build", "--build-arg", f"PI_VERSION={pi_version}",
         "--build-arg", f"UV_VERSION={uv_version}", "-t", image, str(ROOT),
     ]
 
@@ -112,7 +153,9 @@ def run_command(args: argparse.Namespace) -> tuple[list[str], str, bool]:
     artifact_path = _value(args.artifact_path, "ARTIFACT_PATH")
     auth_json_mount = _auth_json_mount_source()
     if auth_json_mount:
-        command.extend(["--volume", f"{auth_json_mount}:/root/.pi/agent/auth.json"])
+        # HOME is /home/review (uid 10001); /root/.pi is never read by Pi.
+        # Read-only: the container never needs to write the host's auth file.
+        command.extend(["--volume", f"{auth_json_mount}:/home/review/.pi/agent/auth.json:ro"])
     if artifact_path:
         Path(artifact_path).mkdir(parents=True, exist_ok=True)
         resolved_artifact_path = Path(artifact_path).resolve()
@@ -154,7 +197,10 @@ def _execute(command: list[str], preview: bool) -> int:
 
 
 def cmd_build(args: argparse.Namespace) -> int:
-    return _execute(build_command(args), args.dry_run)
+    command = build_command(args)
+    if not args.dry_run:
+        _assert_build_capable(command[0])
+    return _execute(command, args.dry_run)
 
 
 def cmd_run(args: argparse.Namespace) -> int:
