@@ -973,6 +973,7 @@ class TestReviewDiffStage:
         assert second.status == StageStatus.OK
         assert second.details["cached"] is True
         assert len(calls) == 2
+
     def test_chunk_workers_use_unique_pi_sessions(self, cfg, artifacts, monkeypatch):
         cfg = replace(cfg, chunk_trigger_diff_bytes=1, max_diff_bytes=1,
                       pi_session_id="pr-42-review-run-1")

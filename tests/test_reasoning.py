@@ -540,7 +540,7 @@ class TestSinglePiReasoningEngine:
         assert pi.run_json.call_count == 1
 
     def test_chunked_execution_dedupes_findings(self, tmp_path: Path):
-        cfg = replace(_cfg(tmp_path), max_diff_bytes=55)
+        cfg = replace(_cfg(tmp_path), max_diff_bytes=55, chunk_trigger_diff_bytes=1)
         pi = MagicMock()
         payload = _valid_review_result_payload()
         partials = [
@@ -585,7 +585,7 @@ class TestSinglePiReasoningEngine:
         assert ReviewResult.model_validate(result.model_dump())
 
     def test_chunked_execution_repeats_shared_context_and_records_usage(self, tmp_path: Path):
-        cfg = replace(_cfg(tmp_path), max_diff_bytes=55, pi_session_enabled=False)
+        cfg = replace(_cfg(tmp_path), max_diff_bytes=55, chunk_trigger_diff_bytes=1, pi_session_enabled=False)
         pi = MagicMock()
         prompts: list[str] = []
         token_usage = [
@@ -647,7 +647,7 @@ class TestSinglePiReasoningEngine:
         assert result.metadata.tokens.model_dump() == {"input": 25, "output": 10, "total": 35}
 
     def test_chunked_synthesis_failure_falls_back_to_boilerplate(self, tmp_path: Path):
-        cfg = replace(_cfg(tmp_path), max_diff_bytes=55)
+        cfg = replace(_cfg(tmp_path), max_diff_bytes=55, chunk_trigger_diff_bytes=1)
         pi = MagicMock()
         partial = {"findings": [], "uncertainties": []}
 
@@ -673,7 +673,7 @@ class TestSinglePiReasoningEngine:
         assert ReviewResult.model_validate(result.model_dump())
 
     def test_chunked_synthesis_invalid_json_falls_back(self, tmp_path: Path):
-        cfg = replace(_cfg(tmp_path), max_diff_bytes=55)
+        cfg = replace(_cfg(tmp_path), max_diff_bytes=55, chunk_trigger_diff_bytes=1)
         pi = MagicMock()
         partial = {"findings": [], "uncertainties": []}
 
@@ -699,7 +699,7 @@ class TestSinglePiReasoningEngine:
         assert ctx.extras["_synthesis_fallback"] is True
 
     def test_synthesis_fallback_flag_reaches_stage_details(self, tmp_path: Path):
-        cfg = replace(_cfg(tmp_path), max_diff_bytes=55)
+        cfg = replace(_cfg(tmp_path), max_diff_bytes=55, chunk_trigger_diff_bytes=1)
         pi = MagicMock()
         partial = {"findings": [], "uncertainties": []}
 
