@@ -898,6 +898,11 @@ class TestFilterFindings:
         with pytest.raises(AdoApiError):
             m._filter_findings([self._f("minor")])
 
+    def test_post_min_severity_none_disables_filtering(self, monkeypatch):
+        monkeypatch.setenv("POST_MIN_SEVERITY", "none")
+        out = m._filter_findings([self._f("nit"), self._f("minor"), self._f("major")])
+        assert len(out) == 3
+
     def test_drop_low_confidence(self, monkeypatch):
         monkeypatch.setenv("POST_MIN_SEVERITY", "nit")
         monkeypatch.setenv("DROP_LOW_CONFIDENCE", "1")

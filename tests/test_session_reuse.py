@@ -772,9 +772,17 @@ class TestRepairStaysInSession:
 
         monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
         monkeypatch.setenv("ADO_AUTH_TOKEN", "secret")
+        monkeypatch.setenv("SYSTEM_ACCESSTOKEN", "secret2")
+        monkeypatch.setenv("AZURE_DEVOPS_EXT_PAT", "secret3")
         PiRunner(cfg).run_json(tmp_path / "p.md", "x", tmp_path / "out.json", "stage")
         for env in envs:
-            for k in ("ADO_AUTH_TOKEN", "ADO_MCP_AUTH_TOKEN", "ADO_API_KEY"):
+            for k in (
+                "SYSTEM_ACCESSTOKEN",
+                "ADO_AUTH_TOKEN",
+                "ADO_MCP_AUTH_TOKEN",
+                "ADO_API_KEY",
+                "AZURE_DEVOPS_EXT_PAT",
+            ):
                 assert k not in env
 
     def test_repair_sends_empty_stdin_in_session_mode(self, cfg, tmp_path, monkeypatch):
@@ -1211,4 +1219,3 @@ class TestTokenUsageObservability:
         )
         payload = json.loads(summary_path.read_text())
         assert payload["stages"][0]["details"]["token_usage_source"] == "stderr-regex"
-

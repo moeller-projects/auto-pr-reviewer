@@ -38,7 +38,7 @@ import subprocess
 import sys
 import tempfile
 
-from ..config import Config
+from ..config import Config, _ENV_ALIASES
 from ..exceptions import PiExecutionError
 from ..runlog import info as _log, warning as _warn
 from .prompts import augment_prompt_file
@@ -70,7 +70,7 @@ def strip_json_fences(path: Path) -> None:
 
 def _scrub_ado_env(env: dict[str, str]) -> None:
     """Remove ADO credentials from the subprocess env in place."""
-    for key in ("ADO_AUTH_TOKEN", "ADO_MCP_AUTH_TOKEN", "ADO_API_KEY"):
+    for key in dict.fromkeys((*_ENV_ALIASES.get("ado_token", ()), "AZURE_DEVOPS_EXT_PAT")):
         env.pop(key, None)
 
 

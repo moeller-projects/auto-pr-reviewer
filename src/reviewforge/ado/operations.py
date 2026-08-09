@@ -501,8 +501,12 @@ def _filter_findings(
     findings: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Apply POST_MIN_SEVERITY / DROP_LOW_CONFIDENCE / REQUIRE_CONTEXT_FOR / MAX_FINDINGS."""
-    post_min = os.getenv("POST_MIN_SEVERITY", "minor")
-    if post_min not in SEV_RANK:
+    post_min = (os.getenv("POST_MIN_SEVERITY", "none") or "none").strip().lower()
+    if post_min == "none":
+        post_min_rank: int | None = None
+    elif post_min in SEV_RANK:
+        post_min_rank = SEV_RANK[post_min]
+    else:
         fail(f"POST_MIN_SEVERITY must be one of: {list(SEV_RANK)}")
     drop_low = is_true(os.getenv("DROP_LOW_CONFIDENCE"))
     require_context_for_raw = os.getenv("REQUIRE_CONTEXT_FOR", "")
@@ -517,7 +521,7 @@ def _filter_findings(
     filtered = [
         f
         for f in findings
-        if (post_min == "none" or SEV_RANK[f["severity"]] >= SEV_RANK[post_min])
+        if (post_min_rank is None or SEV_RANK[f["severity"]] >= post_min_rank)
         and not (drop_low and f.get("confidence") == "low")
     ]
     if require_context_for:
