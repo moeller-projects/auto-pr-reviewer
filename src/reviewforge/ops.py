@@ -16,6 +16,39 @@ from .config import parse_dotenv
 
 ROOT = Path(__file__).resolve().parents[2]
 PIN_FILE = ROOT / "versions.env"
+_ENV_ALLOWLIST_PREFIXES: tuple[str, ...] = (
+    "ADO_",
+    "PR_",
+    "REVIEW_",
+    "PI_",
+    "CHUNK_",
+    "MAX_",
+    "DISABLE_",
+    "DRY_",
+    "FORCE_",
+    "INCLUDE_",
+    "VERIFY_",
+    "FAIL_",
+    "VOTE_",
+    "CONTEXT_",
+    "COLLECT_",
+    "AC_",
+    "REASONING_",
+    "FAST_",
+    "ANCHOR_",
+    "CRG_",
+    "GRAPH_",
+)
+_ENV_ALLOWLIST_KEYS: set[str] = {
+    "SYSTEM_ACCESSTOKEN",
+    "OPENAI_API_KEY",
+    "WORKSPACE",
+    "CLONE_ROOT",
+    "MODEL_BACKEND",
+    "COMMIT_CONTEXT_MAX",
+    "IMAGE",
+    "IMAGE_NAME",
+}
 
 
 def _value(explicit: str | None, name: str, default: str | None = None) -> str | None:
@@ -105,7 +138,9 @@ def _env_file(path: str) -> tuple[str, bool]:
         return str(source.resolve()), False
     handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", prefix="reviewforge-", suffix=".env", delete=False)
     try:
-        handle.writelines(f"{key}={value}\n" for key, value in os.environ.items())
+        for key, value in os.environ.items():
+            if key in _ENV_ALLOWLIST_KEYS or key.startswith(_ENV_ALLOWLIST_PREFIXES):
+                handle.write(f"{key}={value}\n")
     finally:
         handle.close()
     return handle.name, True

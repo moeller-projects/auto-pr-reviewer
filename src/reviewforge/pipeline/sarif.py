@@ -7,8 +7,6 @@ from typing import Any
 
 from ..ado.posting import dedupe_key
 from .schemas import ReviewResult, RichFinding
-
-_REPO_URL = "https://dev.azure.com/aveato/auto-pr-reviewer/_git/auto-pr-reviewer"
 _LEVELS = {"blocker": "error", "major": "error", "minor": "warning", "nit": "note"}
 
 
@@ -47,6 +45,16 @@ def _message(finding: RichFinding) -> str:
 
 def _evidence_summary(finding: RichFinding) -> dict[str, Any]:
     evidence = finding.evidence
+    if evidence is None:
+        return {
+            "changedLines": [],
+            "relatedFiles": [],
+            "testsRead": [],
+            "workItems": [],
+            "whyNewInThisPr": "",
+            "whyNotIntentional": "",
+            "classification": "",
+        }
     return {
         "changedLines": list(evidence.changedLines),
         "relatedFiles": list(evidence.relatedFiles),
@@ -65,7 +73,13 @@ def _validate(log: dict[str, Any]) -> None:
         raise ValueError("invalid SARIF log: expected version and runs")
 
 
-def review_result_to_sarif(result: ReviewResult, *, tool_version: str) -> dict[str, Any]:
+def review_result_to_sarif(
+    result: ReviewResult,
+    *,
+    tool_version: str,
+    repo_url: str = "",
+    pr_id: str = "",
+) -> dict[str, Any]:
     """Render a canonical result as a minimal SARIF 2.1.0 log."""
     rules: list[dict[str, Any]] = []
     rule_ids: dict[str, str] = {}
@@ -115,13 +129,13 @@ def review_result_to_sarif(result: ReviewResult, *, tool_version: str) -> dict[s
             "driver": {
                 "name": "ReviewForge",
                 "version": tool_version,
-                "informationUri": _REPO_URL,
+                "informationUri": repo_url or "https://dev.azure.com",
                 "rules": rules,
             }
         },
         "results": sarif_results,
         "properties": {
-            "prId": result.metadata.model_dump().get("pr_id", ""),
+            "prId": pr_id,
             "model": model.model,
             "reasoningEngine": model.reasoning_engine,
             "inputTokens": tokens.input or metrics.piInputTokens,

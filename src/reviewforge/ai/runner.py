@@ -31,6 +31,7 @@ the full context.
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
 import json
 import os
 import re
@@ -194,7 +195,8 @@ class PiCliRunner:
         cached = self._prompt_cache.get(prompt_path)
         if cached is not None:
             return cached
-        dest = self._prompt_dir / f"{prompt_path.stem}.lang.md"
+        path_hash = hashlib.sha1(str(prompt_path.resolve()).encode("utf-8")).hexdigest()[:8]
+        dest = self._prompt_dir / f"{prompt_path.stem}.{path_hash}.lang.md"
         augmented = augment_prompt_file(prompt_path, self.cfg, dest=dest)
         self._prompt_cache[prompt_path] = augmented
         return augmented

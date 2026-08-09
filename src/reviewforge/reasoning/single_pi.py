@@ -370,7 +370,18 @@ class SinglePiReasoningEngine(ReasoningEngine):
         diff_text = getattr(ctx.state, "diff_text", "") or (
             ctx.artifacts.diff.read_text(encoding="utf-8") if ctx.artifacts.diff.exists() else ""
         )
-        chunks = _diff_chunks(diff_text, cfg.max_diff_bytes)
+        diff_bytes = len(diff_text.encode("utf-8"))
+        if cfg.disable_chunk_review:
+            log_warning("DISABLE_CHUNK_REVIEW enabled; forcing single-pass reasoning")
+            chunks = [diff_text]
+        elif diff_bytes <= cfg.chunk_trigger_diff_bytes:
+            chunks = [diff_text]
+        else:
+            log_warning(
+                f"diff exceeds CHUNK_TRIGGER_DIFF_BYTES ({cfg.chunk_trigger_diff_bytes}); "
+                "using chunked single-pi reasoning"
+            )
+            chunks = _diff_chunks(diff_text, cfg.max_diff_bytes)
         started_at = time.time()
         reasoning_started = time.perf_counter()
         chunk_usage: list[TokenUsage] = []

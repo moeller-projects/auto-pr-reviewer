@@ -306,7 +306,6 @@ __all__ = [
     "ReviewMode",
     "ReviewState",
     "ReviewerIdentity",
-    "build_review_state_payload",
     "normalize_comments",
     "select_review_state",
 ]

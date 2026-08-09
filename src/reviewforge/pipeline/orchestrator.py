@@ -163,19 +163,22 @@ def run_full(cfg: Config) -> RunOutcome:
     summary = new_run_summary(cfg, artifacts)
     ctx = _make_stage_context(cfg, artifacts, pi)
 
-    results = run_stages(DEFAULT_PIPELINE, ctx)
-    _record_results(summary, results)
-    exit_code = _exit_code_for(results)
-    finalize = finalize_run_summary(
-        summary,
-        cfg=cfg,
-        artifacts=artifacts,
-        posted=ctx.posted,
-        skipped_reason=ctx.skip_reason,
-        exit_code=exit_code,
-    )
-    write_json(artifacts.summary, finalize)
-    return RunOutcome(exit_code=exit_code, summary=summary, stages=results)
+    try:
+        results = run_stages(DEFAULT_PIPELINE, ctx)
+        _record_results(summary, results)
+        exit_code = _exit_code_for(results)
+        finalize = finalize_run_summary(
+            summary,
+            cfg=cfg,
+            artifacts=artifacts,
+            posted=ctx.posted,
+            skipped_reason=ctx.skip_reason,
+            exit_code=exit_code,
+        )
+        write_json(artifacts.summary, finalize)
+        return RunOutcome(exit_code=exit_code, summary=summary, stages=results)
+    finally:
+        _cleanup_repo_state(ctx)
 
 
 def run_review_only(cfg: Config, *, output: Path | None = None) -> RunOutcome:
@@ -191,22 +194,25 @@ def run_review_only(cfg: Config, *, output: Path | None = None) -> RunOutcome:
     summary = new_run_summary(cfg, artifacts)
     ctx = _make_stage_context(cfg, artifacts, pi)
 
-    results = run_stages(REVIEW_ONLY_PIPELINE, ctx)
-    _record_results(summary, results)
-    exit_code = _exit_code_for(results)
-    finalize = finalize_run_summary(
-        summary,
-        cfg=cfg,
-        artifacts=artifacts,
-        posted={"review_only": 1, "created": 0, "skipped": 0},
-        skipped_reason=ctx.skip_reason,
-        exit_code=exit_code,
-    )
-    write_json(artifacts.summary, finalize)
-    if output is not None and artifacts.final.exists():
-        output.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(artifacts.final, output)
-    return RunOutcome(exit_code=exit_code, summary=summary, stages=results)
+    try:
+        results = run_stages(REVIEW_ONLY_PIPELINE, ctx)
+        _record_results(summary, results)
+        exit_code = _exit_code_for(results)
+        finalize = finalize_run_summary(
+            summary,
+            cfg=cfg,
+            artifacts=artifacts,
+            posted={"review_only": 1, "created": 0, "skipped": 0},
+            skipped_reason=ctx.skip_reason,
+            exit_code=exit_code,
+        )
+        write_json(artifacts.summary, finalize)
+        if output is not None and artifacts.final.exists():
+            output.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(artifacts.final, output)
+        return RunOutcome(exit_code=exit_code, summary=summary, stages=results)
+    finally:
+        _cleanup_repo_state(ctx)
 
 
 def run_post_only(cfg: Config, *, input_path: Path) -> RunOutcome:
@@ -231,19 +237,22 @@ def run_post_only(cfg: Config, *, input_path: Path) -> RunOutcome:
     validate_postable_review_doc(payload)
     ctx.final = payload
 
-    results = run_stages(POST_ONLY_PIPELINE, ctx)
-    _record_results(summary, results)
-    exit_code = _exit_code_for(results)
-    finalize = finalize_run_summary(
-        summary,
-        cfg=cfg,
-        artifacts=artifacts,
-        posted=ctx.posted,
-        skipped_reason=ctx.skip_reason,
-        exit_code=exit_code,
-    )
-    write_json(artifacts.summary, finalize)
-    return RunOutcome(exit_code=exit_code, summary=summary, stages=results)
+    try:
+        results = run_stages(POST_ONLY_PIPELINE, ctx)
+        _record_results(summary, results)
+        exit_code = _exit_code_for(results)
+        finalize = finalize_run_summary(
+            summary,
+            cfg=cfg,
+            artifacts=artifacts,
+            posted=ctx.posted,
+            skipped_reason=ctx.skip_reason,
+            exit_code=exit_code,
+        )
+        write_json(artifacts.summary, finalize)
+        return RunOutcome(exit_code=exit_code, summary=summary, stages=results)
+    finally:
+        _cleanup_repo_state(ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -269,6 +278,16 @@ def _record_results(summary: RunSummary, results: list) -> None:
 def _exit_code_for(results: list) -> int:
     """Return ``1`` if any stage failed, else ``0``."""
     return 1 if any(r.status == "failed" for r in results) else 0
+
+
+def _cleanup_repo_state(ctx: StageContext) -> None:
+    state = getattr(ctx, "state", None)
+    if state is None:
+        return
+    try:
+        git_ops.cleanup(state)
+    except Exception as exc:  # pragma: no cover - best effort cleanup
+        log_info(f"repository cleanup failed: {type(exc).__name__}: {exc}")
 
 
 __all__ = [

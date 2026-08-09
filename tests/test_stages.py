@@ -940,6 +940,39 @@ class TestReviewDiffStage:
         doc = builder.read_json(artifacts.candidate)
         assert len(doc["findings"]) == 1  # dedup'd across chunks
         assert "(across 2 diff chunks)" in doc["summary"]
+
+    def test_chunked_review_is_cached(self, cfg, artifacts, monkeypatch):
+        cfg = replace(cfg, chunk_trigger_diff_bytes=1, max_diff_bytes=1)
+        pi = MagicMock()
+        calls = []
+
+        def fake_run_json(_prompt, _stdin, out, _stage):
+            calls.append(str(out))
+            builder.write_json(out, self.DOC)
+
+        pi.run_json.side_effect = fake_run_json
+        state = self._state("big diff with many files", ["a.py", "b.py"])
+        monkeypatch.setattr(
+            "reviewforge.pipeline.stages.review_diff.build_chunks",
+            lambda _state, _max: ([
+                SimpleNamespace(diff_text="d1", files_text="a.py\n", truncated=False),
+                SimpleNamespace(diff_text="d2", files_text="b.py\n", truncated=False),
+            ], False),
+        )
+        ctx = _stage_context(cfg, artifacts, pi, state=state)
+        ctx.files_text = "a.py\nb.py\n"
+        ctx.extras["system_prompt"] = "sys"
+        first = ReviewDiffStage()(ctx)
+        assert first.status == StageStatus.OK
+        assert len(calls) == 2
+
+        ctx2 = _stage_context(cfg, artifacts, pi, state=state)
+        ctx2.files_text = "a.py\nb.py\n"
+        ctx2.extras["system_prompt"] = "sys"
+        second = ReviewDiffStage()(ctx2)
+        assert second.status == StageStatus.OK
+        assert second.details["cached"] is True
+        assert len(calls) == 2
     def test_chunk_workers_use_unique_pi_sessions(self, cfg, artifacts, monkeypatch):
         cfg = replace(cfg, chunk_trigger_diff_bytes=1, max_diff_bytes=1,
                       pi_session_id="pr-42-review-run-1")

@@ -134,6 +134,10 @@ def _build_config(args: argparse.Namespace) -> Config:
         v = getattr(args, field, None)
         if v not in (None, ""):
             cli[field] = v
+    pr_id = cli.get("pr_id")
+    if pr_id is not None and not str(pr_id).isdigit():
+        cli.pop("pr_id", None)
+        cli.setdefault("pr_url", str(pr_id))
     try:
         return Config.from_sources(cli)
     except ConfigError as exc:

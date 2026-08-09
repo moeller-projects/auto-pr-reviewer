@@ -216,6 +216,10 @@ class DiffLineMapper:
         """
         if not new_line or not file_path:
             return None
+        try:
+            new_line = int(new_line)
+        except (TypeError, ValueError):
+            return None
         idx = self._index_for(file_path)
         if not idx:
             return None

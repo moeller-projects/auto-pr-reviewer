@@ -249,7 +249,7 @@ class RichFinding(_Base):
     line: int | None = None
     contextBasis: ContextBasis | None = None
     regression: bool = False
-    evidence: RichEvidence = Field(default_factory=RichEvidence)
+    evidence: RichEvidence | None = None
 
     @field_validator("title", "observation", "impact", "recommendation")
     @classmethod

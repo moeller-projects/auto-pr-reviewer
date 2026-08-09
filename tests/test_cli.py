@@ -210,6 +210,17 @@ class TestBuildConfig:
         assert cfg.review_language == "English"
         assert cfg.max_diff_bytes == 200000
 
+    def test_pr_url_passed_via_pr_flag_is_parsed(self, clean_env, monkeypatch):
+        monkeypatch.setenv("ADO_AUTH_TOKEN", "t")
+        ns = build_parser().parse_args(
+            ["review", "--pr", "https://dev.azure.com/contoso/Pay/_git/api/pullrequest/42"]
+        )
+        cfg = _build_config(ns)
+        assert cfg.pr_id == "42"
+        assert cfg.ado_org == "contoso"
+        assert cfg.ado_project == "Pay"
+        assert cfg.ado_repo_id == "api"
+
     def test_collect_context_workers_from_env(self, clean_env, monkeypatch):
         from reviewforge.config import Config
 

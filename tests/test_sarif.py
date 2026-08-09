@@ -31,11 +31,18 @@ def _result(*, severity: str = "major", file: str | None = "src\\app.py", line: 
 
 
 def test_review_result_to_sarif_golden_shape():
-    output = review_result_to_sarif(_result(), tool_version="1.2.3")
+    output = review_result_to_sarif(
+        _result(),
+        tool_version="1.2.3",
+        repo_url="https://dev.azure.com/contoso/Pay/_git/api",
+        pr_id="42",
+    )
     result = output["runs"][0]["results"][0]
     assert output["version"] == "2.1.0"
     assert output["runs"][0]["tool"]["driver"]["name"] == "ReviewForge"
     assert output["runs"][0]["tool"]["driver"]["version"] == "1.2.3"
+    assert output["runs"][0]["tool"]["driver"]["informationUri"] == "https://dev.azure.com/contoso/Pay/_git/api"
+    assert output["runs"][0]["properties"]["prId"] == "42"
     assert output["runs"][0]["tool"]["driver"]["rules"] == [
         {"id": "unsafe-input-handling", "name": "Unsafe input handling!", "shortDescription": {"text": "Unsafe input handling!"}}
     ]

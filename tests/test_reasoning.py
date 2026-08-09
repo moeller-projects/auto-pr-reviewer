@@ -514,6 +514,31 @@ class TestSinglePiReasoningEngine:
         )
         assert _diff_chunks(diff, 55) == _diff_chunks(diff, 55)
 
+    def test_disable_chunk_review_forces_single_pass_even_over_max_bytes(self, tmp_path: Path):
+        cfg = replace(_cfg(tmp_path), max_diff_bytes=10, chunk_trigger_diff_bytes=1, disable_chunk_review=True)
+        pi = MagicMock()
+        pi.run_json.side_effect = lambda _p, _s, out, _st: builder.write_json(out, _valid_review_result_payload())
+        pi.last_tokens = {"in": 1, "out": 1, "total": 2}
+        ctx = _stage_context(cfg, pi)
+        ctx.state.diff_text = "diff --git a/a.py b/a.py\n" + ("+x\n" * 100)
+
+        result = SinglePiReasoningEngine().execute(ctx)
+
+        assert len(result.metrics.chunkTokenUsage) == 0
+        assert pi.run_json.call_count == 1
+
+    def test_chunk_trigger_threshold_prevents_chunking_for_small_diffs(self, tmp_path: Path):
+        cfg = replace(_cfg(tmp_path), max_diff_bytes=10, chunk_trigger_diff_bytes=10_000, disable_chunk_review=False)
+        pi = MagicMock()
+        pi.run_json.side_effect = lambda _p, _s, out, _st: builder.write_json(out, _valid_review_result_payload())
+        pi.last_tokens = {"in": 1, "out": 1, "total": 2}
+        ctx = _stage_context(cfg, pi)
+        ctx.state.diff_text = "diff --git a/a.py b/a.py\n" + ("+x\n" * 100)
+
+        SinglePiReasoningEngine().execute(ctx)
+
+        assert pi.run_json.call_count == 1
+
     def test_chunked_execution_dedupes_findings(self, tmp_path: Path):
         cfg = replace(_cfg(tmp_path), max_diff_bytes=55)
         pi = MagicMock()

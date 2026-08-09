@@ -129,11 +129,14 @@ class TestEnvFile:
         assert temporary is False
 
     def test_missing_file_copies_process_env(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("REVIEWFORGE_TEST_MARKER", "yes")
+        monkeypatch.setenv("ADO_ORG", "contoso")
+        monkeypatch.setenv("UNRELATED_SECRET", "nope")
         path, temporary = ops._env_file(str(tmp_path / "absent.env"))
         try:
             assert temporary is True
-            assert "REVIEWFORGE_TEST_MARKER=yes" in Path(path).read_text(encoding="utf-8")
+            text = Path(path).read_text(encoding="utf-8")
+            assert "ADO_ORG=contoso" in text
+            assert "UNRELATED_SECRET=nope" not in text
         finally:
             Path(path).unlink(missing_ok=True)
 

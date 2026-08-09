@@ -27,6 +27,25 @@ def is_true(value: str | None) -> bool:
 
 
 DEFAULT_REASONING_ENGINE = "single_pi"
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_PROMPTS_DIR = _REPO_ROOT / "prompts"
+_STANDARDS_DIR = _REPO_ROOT / "standards"
+
+
+def _default_file(repo_path: Path, container_path: str) -> Path:
+    return repo_path if repo_path.exists() else Path(container_path)
+
+
+DEFAULT_REVIEW_PROMPT_PATH = _default_file(_PROMPTS_DIR / "review-system.md", "/app/prompts/review-system.md")
+DEFAULT_INTENT_PROMPT_PATH = _default_file(_PROMPTS_DIR / "intent.md", "/app/prompts/intent.md")
+DEFAULT_CONTEXT_PLAN_PROMPT_PATH = _default_file(_PROMPTS_DIR / "context-plan.md", "/app/prompts/context-plan.md")
+DEFAULT_CONTEXT_DIGEST_PROMPT_PATH = _default_file(_PROMPTS_DIR / "context-digest.md", "/app/prompts/context-digest.md")
+DEFAULT_VERIFY_PROMPT_PATH = _default_file(_PROMPTS_DIR / "verify-findings.md", "/app/prompts/verify-findings.md")
+DEFAULT_SEVERITY_PROMPT_PATH = _default_file(_PROMPTS_DIR / "severity.md", "/app/prompts/severity.md")
+DEFAULT_AC_COVERAGE_PROMPT_PATH = _default_file(_PROMPTS_DIR / "ac-coverage.md", "/app/prompts/ac-coverage.md")
+DEFAULT_FAST_REVIEW_PROMPT_PATH = _default_file(_PROMPTS_DIR / "fast-review-system.md", "/app/prompts/fast-review-system.md")
+DEFAULT_CHUNK_SYNTHESIS_PROMPT_PATH = _default_file(_PROMPTS_DIR / "chunk-synthesis.md", "/app/prompts/chunk-synthesis.md")
+DEFAULT_STANDARDS_PATH = _default_file(_STANDARDS_DIR / "clean-code.md", "/app/standards/clean-code.md")
 
 
 def _resolve_reasoning_engine(raw: str | None, fast_review: bool) -> str:
@@ -216,7 +235,7 @@ class Config:
     #: Maximum number of uncovered ACs to send to the LLM per run.
     ac_coverage_llm_max_acs: int = field(default=10, compare=False)
     #: System prompt for the AC coverage LLM re-check.
-    ac_coverage_prompt_path: Path = field(default=Path("/app/prompts/ac-coverage.md"), compare=False)
+    ac_coverage_prompt_path: Path = field(default=DEFAULT_AC_COVERAGE_PROMPT_PATH, compare=False)
     # --- Reasoning engine --------------------------------------------------
     #: Engine that drives the Pi-driven portion of the review pipeline.
     #: ``single_pi`` performs the entire review in one model call and is the
@@ -230,9 +249,9 @@ class Config:
     #: to ``reasoning_engine = "single_pi"``.
     fast_review: bool = field(default=False, compare=False)
     #: System prompt for the single-call reasoning engine.
-    fast_review_prompt_path: Path = field(default=Path("/app/prompts/fast-review-system.md"), compare=False)
+    fast_review_prompt_path: Path = field(default=DEFAULT_FAST_REVIEW_PROMPT_PATH, compare=False)
     #: System prompt for the whole-PR synthesis call after chunked reviews.
-    chunk_synthesis_prompt_path: Path = field(default=Path("/app/prompts/chunk-synthesis.md"), compare=False)
+    chunk_synthesis_prompt_path: Path = field(default=DEFAULT_CHUNK_SYNTHESIS_PROMPT_PATH, compare=False)
     #: Maximum commit subjects supplied as intent evidence to single_pi.
     commit_context_max: int = field(default=50, compare=False)
     #: Handling for findings whose inline anchor is absent from the current diff.
@@ -289,8 +308,10 @@ class Config:
         review_artifact_dir = os.getenv("REVIEW_ARTIFACT_DIR") or None
         review_artifact_root = Path(os.getenv("REVIEW_ARTIFACT_ROOT", "/workspace/artifacts"))
         review_run_id = os.getenv("REVIEW_RUN_ID") or None
-        if not os.getenv("CHUNK_TRIGGER_DIFF_BYTES"):
-            os.environ["CHUNK_TRIGGER_DIFF_BYTES"] = str(int(os.getenv("MAX_DIFF_BYTES", "200000")))
+        max_diff_bytes = require_uint("MAX_DIFF_BYTES", os.getenv("MAX_DIFF_BYTES", "200000"))
+        chunk_trigger_raw = os.getenv("CHUNK_TRIGGER_DIFF_BYTES")
+        if not chunk_trigger_raw:
+            chunk_trigger_raw = str(max_diff_bytes)
 
         # Pi session controls.
         pi_session_id = os.getenv("PI_SESSION_ID") or None
@@ -335,17 +356,17 @@ class Config:
             "AC_COVERAGE_LLM_MAX_ACS", os.getenv("AC_COVERAGE_LLM_MAX_ACS", "10")
         )
         ac_coverage_prompt_path = _resolve_prompt_path(
-            "AC_COVERAGE_PROMPT_PATH", "/app/prompts/ac-coverage.md"
+            "AC_COVERAGE_PROMPT_PATH", str(DEFAULT_AC_COVERAGE_PROMPT_PATH)
         )
         fast_review = is_true(os.getenv("FAST_REVIEW"))
         reasoning_engine = _resolve_reasoning_engine(
             os.getenv("REASONING_ENGINE"), fast_review
         )
         fast_review_prompt_path = _resolve_prompt_path(
-            "FAST_REVIEW_PROMPT_PATH", "/app/prompts/fast-review-system.md"
+            "FAST_REVIEW_PROMPT_PATH", str(DEFAULT_FAST_REVIEW_PROMPT_PATH)
         )
         chunk_synthesis_prompt_path = _resolve_prompt_path(
-            "CHUNK_SYNTHESIS_PROMPT_PATH", "/app/prompts/chunk-synthesis.md"
+            "CHUNK_SYNTHESIS_PROMPT_PATH", str(DEFAULT_CHUNK_SYNTHESIS_PROMPT_PATH)
         )
         commit_context_max = require_uint(
             "COMMIT_CONTEXT_MAX", os.getenv("COMMIT_CONTEXT_MAX", "50")
@@ -365,18 +386,16 @@ class Config:
             workspace=Path(os.getenv("WORKSPACE", "/workspace")),
             clone_root=Path(os.getenv("CLONE_ROOT", "/workspace/repo")),
             review_language=os.getenv("REVIEW_LANGUAGE", "English"),
-            review_prompt_path=_resolve_prompt_path("REVIEW_PROMPT_PATH", "/app/prompts/review-system.md"),
-            intent_prompt_path=_resolve_prompt_path("INTENT_PROMPT_PATH", "/app/prompts/intent.md"),
-            context_plan_prompt_path=_resolve_prompt_path("CONTEXT_PLAN_PROMPT_PATH", "/app/prompts/context-plan.md"),
-            context_digest_prompt_path=_resolve_prompt_path("CONTEXT_DIGEST_PROMPT_PATH", "/app/prompts/context-digest.md"),
-            verify_prompt_path=_resolve_prompt_path("VERIFY_PROMPT_PATH", "/app/prompts/verify-findings.md"),
-            severity_prompt_path=_resolve_prompt_path("SEVERITY_PROMPT_PATH", "/app/prompts/severity.md"),
-            standards_path=Path(os.getenv("REVIEW_STANDARDS_PATH", "/app/standards/clean-code.md")),
+            review_prompt_path=_resolve_prompt_path("REVIEW_PROMPT_PATH", str(DEFAULT_REVIEW_PROMPT_PATH)),
+            intent_prompt_path=_resolve_prompt_path("INTENT_PROMPT_PATH", str(DEFAULT_INTENT_PROMPT_PATH)),
+            context_plan_prompt_path=_resolve_prompt_path("CONTEXT_PLAN_PROMPT_PATH", str(DEFAULT_CONTEXT_PLAN_PROMPT_PATH)),
+            context_digest_prompt_path=_resolve_prompt_path("CONTEXT_DIGEST_PROMPT_PATH", str(DEFAULT_CONTEXT_DIGEST_PROMPT_PATH)),
+            verify_prompt_path=_resolve_prompt_path("VERIFY_PROMPT_PATH", str(DEFAULT_VERIFY_PROMPT_PATH)),
+            severity_prompt_path=_resolve_prompt_path("SEVERITY_PROMPT_PATH", str(DEFAULT_SEVERITY_PROMPT_PATH)),
+            standards_path=Path(os.getenv("REVIEW_STANDARDS_PATH", str(DEFAULT_STANDARDS_PATH))),
             pi_model=os.getenv("PI_MODEL", "openai/gpt-5.5"),
-            max_diff_bytes=require_uint("MAX_DIFF_BYTES", os.getenv("MAX_DIFF_BYTES", "200000")),
-            chunk_trigger_diff_bytes=require_uint(
-                "CHUNK_TRIGGER_DIFF_BYTES", os.getenv("CHUNK_TRIGGER_DIFF_BYTES", "200000")
-            ),
+            max_diff_bytes=max_diff_bytes,
+            chunk_trigger_diff_bytes=require_uint("CHUNK_TRIGGER_DIFF_BYTES", chunk_trigger_raw),
             disable_chunk_review=is_true(os.getenv("DISABLE_CHUNK_REVIEW")),
             pi_timeout_secs=require_uint("PI_TIMEOUT_SECS", os.getenv("PI_TIMEOUT_SECS", "600")),
             dry_run=is_true(os.getenv("DRY_RUN")),
@@ -478,10 +497,8 @@ class Config:
         legacy stage prompts as well.
         """
         paths = [self.standards_path]
-        if self.fast_review_prompt_path != Path("/app/prompts/fast-review-system.md") or self.fast_review_prompt_path.exists():
-            paths.append(self.fast_review_prompt_path)
-        if self.chunk_synthesis_prompt_path != Path("/app/prompts/chunk-synthesis.md") or self.chunk_synthesis_prompt_path.exists():
-            paths.append(self.chunk_synthesis_prompt_path)
+        paths.append(self.fast_review_prompt_path)
+        paths.append(self.chunk_synthesis_prompt_path)
         legacy_paths = [
             self.review_prompt_path,
             self.intent_prompt_path,
@@ -491,16 +508,16 @@ class Config:
             self.severity_prompt_path,
         ]
         if self.reasoning_engine == "multi_stage" or any(
-            path != Path(f"/app/prompts/{name}")
-            for path, name in zip(
+            path != default
+            for path, default in zip(
                 legacy_paths,
                 (
-                    "review-system.md",
-                    "intent.md",
-                    "context-plan.md",
-                    "context-digest.md",
-                    "verify-findings.md",
-                    "severity.md",
+                    DEFAULT_REVIEW_PROMPT_PATH,
+                    DEFAULT_INTENT_PROMPT_PATH,
+                    DEFAULT_CONTEXT_PLAN_PROMPT_PATH,
+                    DEFAULT_CONTEXT_DIGEST_PROMPT_PATH,
+                    DEFAULT_VERIFY_PROMPT_PATH,
+                    DEFAULT_SEVERITY_PROMPT_PATH,
                 ),
             )
         ):
@@ -636,11 +653,11 @@ def _build_from_sources(
     review_run_id = cli_or_env("review_run_id", "REVIEW_RUN_ID") or None
 
     # Pi session controls (Phase A + E).
-    pi_session_id = cli.get("pi_session_id") or os.getenv("PI_SESSION_ID") or None
+    pi_session_id = cli.get("pi_session_id") or env.get("PI_SESSION_ID") or None
     pi_session_enabled = _coerce_bool(cli.get("pi_session_enabled"), default=True,
-                                       env_value=os.getenv("PI_SESSION_ENABLED"))
+                                       env_value=env.get("PI_SESSION_ENABLED"))
     pi_session_clear = _coerce_bool(cli.get("pi_session_clear"), default=False,
-                                     env_value=os.getenv("PI_SESSION_CLEAR"))
+                                     env_value=env.get("PI_SESSION_CLEAR"))
 
     # PR id: prefer explicit CLI ``--pr``; fall back to PR_ID env, then PR_URL.
     pr_id = cli_or_env("pr_id", "PR_ID")
@@ -722,30 +739,28 @@ def _build_from_sources(
         clone_root=to_path(cli_or_env("clone_root", "CLONE_ROOT"), "/workspace/repo"),
         review_language=cli_or_env("review_language", "REVIEW_LANGUAGE", "English"),
         review_prompt_path=to_path(
-            cli_or_env("review_prompt_path", "REVIEW_PROMPT_PATH"), "/app/prompts/review-system.md"
+            cli_or_env("review_prompt_path", "REVIEW_PROMPT_PATH"), str(DEFAULT_REVIEW_PROMPT_PATH)
         ),
         intent_prompt_path=to_path(
-            cli_or_env("intent_prompt_path", "INTENT_PROMPT_PATH"), "/app/prompts/intent.md"
+            cli_or_env("intent_prompt_path", "INTENT_PROMPT_PATH"), str(DEFAULT_INTENT_PROMPT_PATH)
         ),
         context_plan_prompt_path=to_path(
             cli_or_env("context_plan_prompt_path", "CONTEXT_PLAN_PROMPT_PATH"),
-            "/app/prompts/context-plan.md",
+            str(DEFAULT_CONTEXT_PLAN_PROMPT_PATH),
         ),
         context_digest_prompt_path=to_path(
             cli_or_env("context_digest_prompt_path", "CONTEXT_DIGEST_PROMPT_PATH"),
-            "/app/prompts/context-digest.md",
+            str(DEFAULT_CONTEXT_DIGEST_PROMPT_PATH),
         ),
         verify_prompt_path=to_path(
-            cli_or_env("verify_prompt_path", "VERIFY_PROMPT_PATH"), "/app/prompts/verify-findings.md"
+            cli_or_env("verify_prompt_path", "VERIFY_PROMPT_PATH"), str(DEFAULT_VERIFY_PROMPT_PATH)
         ),
         severity_prompt_path=to_path(
-            cli_or_env("severity_prompt_path", "SEVERITY_PROMPT_PATH"), "/app/prompts/severity.md"
+            cli_or_env("severity_prompt_path", "SEVERITY_PROMPT_PATH"), str(DEFAULT_SEVERITY_PROMPT_PATH)
         ),
         standards_path=to_path(
             cli_or_env("standards_path", "REVIEW_STANDARDS_PATH"),
-            str(Path(__file__).resolve().parents[2] / "standards" / "clean-code.md")
-            if (Path(__file__).resolve().parents[2] / "standards" / "clean-code.md").exists()
-            else "/app/standards/clean-code.md",
+            str(DEFAULT_STANDARDS_PATH),
         ),
         pi_model=cli_or_env("pi_model", "PI_MODEL", "openai/gpt-5.5"),
         max_diff_bytes=max_diff_bytes,
@@ -775,17 +790,17 @@ def _build_from_sources(
         ac_coverage_llm=ac_coverage_llm,
         ac_coverage_llm_max_acs=ac_coverage_llm_max_acs,
         ac_coverage_prompt_path=to_path(
-            cli_or_env("ac_coverage_prompt_path", "AC_COVERAGE_PROMPT_PATH"), "/app/prompts/ac-coverage.md"
+            cli_or_env("ac_coverage_prompt_path", "AC_COVERAGE_PROMPT_PATH"), str(DEFAULT_AC_COVERAGE_PROMPT_PATH)
         ),
         reasoning_engine=reasoning_engine,
         fast_review=fast_review,
         fast_review_prompt_path=to_path(
             cli_or_env("fast_review_prompt_path", "FAST_REVIEW_PROMPT_PATH"),
-            str(Path(__file__).resolve().parents[2] / "prompts" / "fast-review-system.md"),
+            str(DEFAULT_FAST_REVIEW_PROMPT_PATH),
         ),
         chunk_synthesis_prompt_path=to_path(
             cli_or_env("chunk_synthesis_prompt_path", "CHUNK_SYNTHESIS_PROMPT_PATH"),
-            str(Path(__file__).resolve().parents[2] / "prompts" / "chunk-synthesis.md"),
+            str(DEFAULT_CHUNK_SYNTHESIS_PROMPT_PATH),
         ),
         commit_context_max=commit_context_max,
         anchor_policy=anchor_policy,

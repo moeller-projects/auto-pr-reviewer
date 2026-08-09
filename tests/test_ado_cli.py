@@ -818,8 +818,62 @@ class TestAdditionalCoverage:
             with pytest.raises(AdoApiError, match="POST_MIN_SEVERITY must be one of"):
                 m.post_findings(cfg, findings_file, out_file)
 
+    def test_post_findings_prefers_cfg_post_min_severity_over_env(self, tmp_path, monkeypatch):
+        findings_file = tmp_path / "findings.json"
+        out_file = tmp_path / "posted.json"
+        findings_file.write_text(
+            json.dumps(
+                {
+                    "summary": "ok",
+                    "findings": [
+                        {"severity": "minor", "title": "minor", "message": "M"},
+                        {"severity": "major", "title": "major", "message": "M"},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        cfg = SimpleNamespace(
+            ado_org="contoso",
+            ado_project="Payments",
+            ado_repo_id="api",
+            pr_id="42",
+            ado_token="tok",
+            ado_retry_attempts=3,
+            ado_retry_base_delay=1.0,
+            ado_retry_cap_delay=30.0,
+            ado_retry_budget_secs=90.0,
+            post_min_severity="major",
+            drop_low_confidence=False,
+            require_context_for="",
+            max_findings=None,
+            vote_waiting_on="none",
+            fail_on="none",
+        )
+        mock_client = MagicMock()
+        mock_client.get_pr.return_value = {"reviewers": []}
+        mock_client.get_threads.return_value = []
+        mock_client.create_thread.return_value = {"id": 1}
+        monkeypatch.setenv("POST_MIN_SEVERITY", "nit")
+        with patch("reviewforge.ado.cli.AdoClient", return_value=mock_client):
+            rc = m.post_findings(cfg, findings_file, out_file)
+        assert rc["accepted"] == 1
+
     def test_enc_quotes_values(self):
         assert m.enc('a b') == 'a%20b'
+
+    def test_diff_mapper_find_tolerates_string_line_number(self):
+        diff = (
+            "diff --git a/a.py b/a.py\n"
+            "--- a/a.py\n"
+            "+++ b/a.py\n"
+            "@@ -1 +1 @@\n"
+            "-old\n"
+            "+new\n"
+        )
+        mapper = m.DiffLineMapper.from_text(diff)
+        ctx = mapper.find("a.py", "1")
+        assert ctx is not None
 
     def test_client_initializes_with_token_and_normalized_org(self, monkeypatch):
         monkeypatch.setenv('ADO_AUTH_TOKEN', 'tok')
