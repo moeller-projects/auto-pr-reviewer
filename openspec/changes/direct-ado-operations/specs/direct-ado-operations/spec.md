@@ -9,7 +9,7 @@ The pipeline MUST invoke dedicated in-process operations for fetching PR context
 
 #### Scenario: Post stage invokes the direct operation
 - **WHEN** the post stage runs with final findings and posting is enabled
-- **THEN** it MUST call the direct post operation and preserve the existing `posted-findings.json` artifact shape
+- **THEN** it MUST call the direct post operation and preserve the existing `posted-comments.json` artifact shape
 
 ### Requirement: Legacy ADO CLI remains compatible
 The package MUST continue to support `python -m reviewforge.ado.cli fetch-context` and `post-findings` for external callers.

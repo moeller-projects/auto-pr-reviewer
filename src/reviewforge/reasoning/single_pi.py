@@ -212,52 +212,6 @@ def _build_single_pi_prefix(ctx: StageContext) -> str:
     return "\n".join(parts)
 
 
-def _reduce_diff(diff_text: str, max_bytes: int) -> tuple[str, bool]:
-    """Deterministically keep changed hunks within ``max_bytes``.
-
-    Each file receives an equal share of the byte budget. Changed lines are
-    preferred over ``diff --git`` metadata; headers are included whenever the
-    share can accommodate them. A final UTF-8-safe prefix is a defensive cap.
-    """
-    if max_bytes <= 0:
-        return "", bool(diff_text)
-    encoded = diff_text.encode("utf-8")
-    if len(encoded) <= max_bytes:
-        return diff_text, False
-
-    sections = [section for section in diff_text.split("diff --git ") if section]
-    if not sections:
-        return encoded[:max_bytes].decode("utf-8", "ignore"), True
-
-    pieces: list[str] = []
-    remaining = max_bytes
-    for index, section in enumerate(sections):
-        lines = section.splitlines()
-        if not lines:
-            continue
-        header = f"diff --git {lines[0]}"
-        changed_lines = [
-            line for line in lines[1:]
-            if (line.startswith("+") or line.startswith("-"))
-            and not line.startswith(("+++", "---"))
-        ]
-        body = "\n".join(changed_lines) or "\n".join(lines[1:])
-        sections_left = len(sections) - index
-        share = remaining // sections_left
-        header_bytes = len(header.encode("utf-8")) + 1
-        if body and share > header_bytes:
-            piece = header + "\n" + body.encode("utf-8")[: share - header_bytes].decode("utf-8", "ignore")
-        else:
-            piece = _utf8_prefix(body or header, share)
-        if piece:
-            pieces.append(piece.rstrip())
-            used = len(piece.encode("utf-8"))
-            remaining = max(0, remaining - used - 1)
-
-    result = _utf8_prefix("\n".join(pieces), max_bytes)
-    return result, True
-
-
 def _utf8_prefix(text: str, max_bytes: int) -> str:
     """Return the longest UTF-8-safe prefix fitting ``max_bytes``."""
     return text.encode("utf-8")[:max_bytes].decode("utf-8", "ignore")
@@ -270,11 +224,6 @@ def _all_commit_lines(ctx: StageContext) -> list[str]:
     else:
         text = ""
     return text.splitlines()
-
-
-def _commit_lines(ctx: StageContext) -> list[str]:
-    """Return the historical capped commit view used by legacy callers."""
-    return _all_commit_lines(ctx)[:getattr(ctx.cfg, "commit_context_max", 50)]
 
 
 def _diff_chunks(diff_text: str, max_bytes: int) -> list[str]:

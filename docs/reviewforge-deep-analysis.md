@@ -360,7 +360,7 @@ sequenceDiagram
 - `PostToAdoStage.run`
   - synthesize `ctx.final` from `ctx.review_result`
   - dry-run print-only branch
-  - post helper failure recovery (read back `posted-findings.json`)
+  - post helper failure recovery (read back `posted-comments.json`)
 - `ReviewDiffStage.run`
   - cache hit
   - single-pass review vs chunked review

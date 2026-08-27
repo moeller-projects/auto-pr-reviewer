@@ -74,7 +74,7 @@ def _build_common_parser() -> argparse.ArgumentParser:
     # Pi session reuse (Phases A + E of the token-savings plan).
     p.add_argument(
         "--pi-session-id", dest="pi_session_id",
-        help="Pi session id (default: pr-<pr_id>-review-<run_id>)",
+        help="Pi session id (default: pr-<pr_id>-review[-<run_id>])",
     )
     p.add_argument(
         "--no-pi-session", dest="pi_session_enabled", action="store_false", default=None,
@@ -94,31 +94,6 @@ def _build_common_parser() -> argparse.ArgumentParser:
     )
     return p
 
-
-def _apply_common(cfg: Config, args: argparse.Namespace) -> Config:
-    """Return a copy of ``cfg`` with any non-None CLI args applied."""
-    overrides: dict[str, Any] = {}
-    for field in (
-        "ado_org", "ado_project", "ado_repo_id", "pr_id", "pr_url",
-        "source_branch", "target_branch", "ado_token", "pi_model",
-        "review_language", "review_artifact_dir", "review_run_id",
-        "pi_session_id", "reasoning_engine",
-    ):
-        v = getattr(args, field, None)
-        if v not in (None, ""):
-            overrides[field] = v
-    for field in (
-        "dry_run", "force_review", "force_full_review", "pi_session_enabled",
-        "pi_session_clear", "fast_review",
-    ):
-        v = getattr(args, field, None)
-        if v is not None:
-            overrides[field] = v
-    if "pr_id" in overrides and not str(overrides["pr_id"]).isdigit():
-        # Allow ``--pr https://...`` shape.
-        url = overrides.pop("pr_id")
-        overrides.setdefault("pr_url", url)
-    return cfg.with_overrides(**overrides) if overrides else cfg
 
 
 def _build_config(args: argparse.Namespace) -> Config:

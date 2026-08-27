@@ -298,7 +298,7 @@ class TestFullRunEndToEnd:
         assert "threadContext" not in general
 
         artifacts_dir = _artifacts_dir(cfg)
-        posted = json.loads((artifacts_dir / "posted-findings.json").read_text(encoding="utf-8"))
+        posted = json.loads((artifacts_dir / "posted-comments.json").read_text(encoding="utf-8"))
         assert posted["created"] == 2
         assert posted["skipped_reasons"]["no_line_mapping"] == 1
 
@@ -317,7 +317,7 @@ class TestFullRunEndToEnd:
     def test_chunked_run_repeats_shared_prefix_without_session(self, cfg, git_repo, ado, monkeypatch):
         import dataclasses
 
-        cfg = dataclasses.replace(cfg, max_diff_bytes=200, pi_session_enabled=False)
+        cfg = dataclasses.replace(cfg, max_diff_bytes=200, chunk_trigger_diff_bytes=0, pi_session_enabled=False)
         finding = _rich_finding("dup finding", file="src/app.py", line=3)
 
         def responder(stage, _stdin):
@@ -381,7 +381,7 @@ class TestFullRunEndToEnd:
         assert second.exit_code == 0
         assert len(ado.created_threads) == 1  # nothing new posted
         artifacts_dir = _artifacts_dir(cfg)
-        posted = json.loads((artifacts_dir / "posted-findings.json").read_text(encoding="utf-8"))
+        posted = json.loads((artifacts_dir / "posted-comments.json").read_text(encoding="utf-8"))
         assert posted["created"] == 0
         assert posted["skipped_reasons"]["duplicate"] == 1
 
@@ -428,7 +428,7 @@ class TestPostOnlyEndToEnd:
         # Findings were still posted before the failure was reported.
         assert len(ado.created_threads) == 1
         artifacts_dir = _artifacts_dir(cfg)
-        posted = json.loads((artifacts_dir / "posted-findings.json").read_text(encoding="utf-8"))
+        posted = json.loads((artifacts_dir / "posted-comments.json").read_text(encoding="utf-8"))
         assert posted["failOnTriggered"] is True
         assert posted["created"] == 1
 
@@ -453,7 +453,7 @@ class TestPostOnlyEndToEnd:
         assert "process note" in json.dumps(ado.created_threads[0])
         assert "threadContext" not in ado.created_threads[0]
         artifacts_dir = _artifacts_dir(cfg)
-        posted = json.loads((artifacts_dir / "posted-findings.json").read_text(encoding="utf-8"))
+        posted = json.loads((artifacts_dir / "posted-comments.json").read_text(encoding="utf-8"))
         assert posted["skipped_reasons"]["no_line_mapping"] == 1
 
     def test_validation_error_surfaces_detail(self, cfg, ado, tmp_path, monkeypatch):

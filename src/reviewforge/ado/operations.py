@@ -781,6 +781,24 @@ def fetch_pr_context(cfg: Any, out_dir: Path) -> dict[str, Any]:  # pragma: no c
     return read_json(out_dir / "context.json") or {}
 
 
+def _posting_arg(cfg: Any, name: str) -> Any:
+    """Return the cfg posting value, or ``None`` when it is the field default.
+
+    ``None`` lets ``command_post_findings`` fall back to the environment, so
+    a directly-constructed ``Config`` (e.g. in tests or embedders) does not
+    shadow ``POST_MIN_SEVERITY`` and friends with defaults.
+    """
+    import dataclasses
+    value = getattr(cfg, name, None)
+    try:
+        default = next(
+            f.default for f in dataclasses.fields(type(cfg)) if f.name == name
+        )
+    except (TypeError, StopIteration):
+        return value
+    return None if value == default else value
+
+
 def post_findings(cfg: Any, findings_path: Path, out_path: Path) -> dict[str, Any]:  # pragma: no cover
     args = SimpleNamespace(
         org=cfg.ado_org,
@@ -794,12 +812,12 @@ def post_findings(cfg: Any, findings_path: Path, out_path: Path) -> dict[str, An
         retry_base_delay=cfg.ado_retry_base_delay,
         retry_cap_delay=cfg.ado_retry_cap_delay,
         retry_budget_secs=cfg.ado_retry_budget_secs,
-        post_min_severity=getattr(cfg, "post_min_severity", None),
-        drop_low_confidence=getattr(cfg, "drop_low_confidence", None),
-        require_context_for=getattr(cfg, "require_context_for", None),
-        max_findings=str(getattr(cfg, "max_findings", "") if getattr(cfg, "max_findings", None) is not None else ""),
-        vote_waiting_on=getattr(cfg, "vote_waiting_on", None),
-        fail_on=getattr(cfg, "fail_on", None),
+        post_min_severity=_posting_arg(cfg, "post_min_severity"),
+        drop_low_confidence=_posting_arg(cfg, "drop_low_confidence"),
+        require_context_for=_posting_arg(cfg, "require_context_for"),
+        max_findings=str(_posting_arg(cfg, "max_findings") or ""),
+        vote_waiting_on=_posting_arg(cfg, "vote_waiting_on"),
+        fail_on=_posting_arg(cfg, "fail_on"),
     )
     code = command_post_findings(args)
     result = read_json(out_path) or {}

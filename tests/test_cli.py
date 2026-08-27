@@ -24,7 +24,6 @@ sys.path.insert(0, str(ROOT / "src"))
 from reviewforge import cli  # noqa: E402
 from reviewforge.exceptions import PiExecutionError  # noqa: E402
 from reviewforge.cli import (  # noqa: E402
-    _apply_common,
     _build_config,
     build_parser,
     cmd_open_prs,
@@ -114,77 +113,6 @@ class TestParserWiring:
     def test_no_post_flag(self):
         a = build_parser().parse_args(["review", "--no-post"])
         assert a.no_post is True
-
-
-# ---------------------------------------------------------------------------
-# _apply_common
-# ---------------------------------------------------------------------------
-
-
-class TestApplyCommon:
-    def _cfg(self):
-        from reviewforge.config import Config
-        return Config(
-            ado_org="o", ado_project="P", ado_repo_id="R", pr_id="1", ado_token="t",
-            source_branch="feature", target_branch="main",
-            workspace=Path("/tmp"), clone_root=Path("/tmp"),
-            review_language="English",
-            review_prompt_path=Path("/tmp/r.md"), intent_prompt_path=Path("/tmp/i.md"),
-            context_plan_prompt_path=Path("/tmp/p.md"),
-            context_digest_prompt_path=Path("/tmp/d.md"),
-            verify_prompt_path=Path("/tmp/v.md"), severity_prompt_path=Path("/tmp/s.md"),
-            standards_path=Path("/tmp/std.md"),
-            pi_model="m", max_diff_bytes=100, chunk_trigger_diff_bytes=100,
-            disable_chunk_review=False, pi_timeout_secs=5, dry_run=False,
-            include_work_items=True, include_existing_comments=True,
-            verify_findings=True, force_review=False, review_target_branches="",
-            review_artifact_dir=None, review_artifact_root=Path("/tmp/art"),
-            review_run_id=None,
-        )
-
-    def test_preserves_config_when_no_overrides(self):
-        cfg = self._cfg()
-        ns = build_parser().parse_args(["review"])
-        assert _apply_common(cfg, ns) is cfg
-
-    def test_overrides_string_fields(self):
-        cfg = self._cfg()
-        ns = build_parser().parse_args([
-            "review", "--org", "neworg", "--pi-model", "x/y",
-            "--language", "German", "--review-run-id", "rid",
-        ])
-        out = _apply_common(cfg, ns)
-        assert out.ado_org == "neworg"
-        assert out.pi_model == "x/y"
-        assert out.review_language == "German"
-        assert out.review_run_id == "rid"
-
-    def test_overrides_dry_run_true(self):
-        cfg = self._cfg()
-        ns = build_parser().parse_args(["review", "--dry-run"])
-        out = _apply_common(cfg, ns)
-        assert out.dry_run is True
-
-    def test_overrides_dry_run_false(self):
-        cfg = self._cfg()
-        ns = build_parser().parse_args(["review", "--no-dry-run"])
-        out = _apply_common(cfg, ns)
-        assert out.dry_run is False
-
-    def test_overrides_force_review(self):
-        cfg = self._cfg()
-        ns = build_parser().parse_args(["review", "--force-review"])
-        out = _apply_common(cfg, ns)
-        assert out.force_review is True
-
-    def test_pr_as_url_rewrites_pr_url(self):
-        cfg = self._cfg()
-        url = "https://dev.azure.com/contoso/Pay/_git/api/pullrequest/77"
-        ns = build_parser().parse_args(["review", "--pr", url])
-        out = _apply_common(cfg, ns)
-        # ``--pr`` with a non-digit value moves into pr_url.
-        assert out.pr_id == "1"  # original
-        assert out.pr_url == url
 
 
 # ---------------------------------------------------------------------------

@@ -35,9 +35,7 @@ from reviewforge.reasoning.single_pi import (  # noqa: E402
     SinglePiReasoningEngine,
     _build_single_pi_instruction,
     _build_synthesis_instruction,
-    _commit_lines,
     _diff_chunks,
-    _reduce_diff,
 )
 
 def _cfg(tmp_path: Path) -> Config:
@@ -189,50 +187,6 @@ class TestCanonicalReviewResultContract:
         with pytest.raises(Exception, match="reference"):
             ReviewResult.model_validate(payload)
 
-    @pytest.mark.parametrize(
-        ("diff", "limit"),
-        [
-            ("", 0),
-            ("diff --git a/a.py b/a.py\n@@ -1 +1 @@\n+é\n", 1),
-            ("diff --git a/a.py b/a.py\n@@ -1 +1 @@\n+changed\n", 24),
-            (
-                "diff --git a/a.py b/a.py\n@@ -1 +1 @@\n+one\n"
-                "diff --git a/b.py b/b.py\n@@ -1 +1 @@\n+two\n",
-                20,
-            ),
-            (
-                "".join(
-                    f"diff --git a/file{i}.py b/file{i}.py\n@@ -1 +1 @@\n+change{i}\n"
-                    for i in range(100)
-                ),
-                17,
-            ),
-        ],
-    )
-    def test_diff_reduction_never_exceeds_limit(self, diff, limit):
-        reduced, _ = _reduce_diff(diff, limit)
-        assert len(reduced.encode("utf-8")) <= limit
-
-    def test_diff_reduction_preserves_headers_when_budget_allows(self):
-        diff = (
-            "diff --git a/a.py b/a.py\n@@ -1 +1 @@\n+a\n"
-            "diff --git a/b.py b/b.py\n@@ -1 +1 @@\n+b\n"
-        )
-        reduced, was_reduced = _reduce_diff(diff, 70)
-        assert was_reduced is True
-        assert "diff --git a/a.py b/a.py" in reduced
-        assert "diff --git a/b.py b/b.py" in reduced
-
-    def test_diff_reduction_is_deterministic(self):
-        diff = "diff --git a/a.py b/a.py\n+é\n" * 20
-        assert _reduce_diff(diff, 31) == _reduce_diff(diff, 31)
-
-    def test_diff_at_exact_limit_is_unchanged(self):
-        diff = "diff --git a/a.py b/a.py\n+é\n"
-        reduced, was_reduced = _reduce_diff(diff, len(diff.encode("utf-8")))
-        assert reduced == diff
-        assert was_reduced is False
-
     def test_postable_projection_rejects_missing_evidence(self):
         with pytest.raises(ReviewForgeError, match="evidence"):
             validate_postable_review_doc(
@@ -249,12 +203,6 @@ class TestCanonicalReviewResultContract:
                 }
             )
 
-    def test_diff_without_sections_is_byte_truncated(self):
-        reduced, was_reduced = _reduce_diff("diff --git ", 5)
-        assert reduced == "diff "
-        assert was_reduced is True
-
-
 class TestChunkSynthesisHelpers:
     def test_synthesis_instruction_lists_findings_and_uncertainties(self):
         text = _build_synthesis_instruction(
@@ -269,19 +217,6 @@ class TestChunkSynthesisHelpers:
     def test_synthesis_instruction_handles_empty_merges(self):
         text = _build_synthesis_instruction(2, [], [])
         assert text.count("- none") == 2
-
-    def test_commit_lines_fall_back_to_git_log(self, tmp_path: Path, monkeypatch):
-        cfg = _cfg(tmp_path)
-        pi = MagicMock()
-        ctx = _stage_context(cfg, pi)
-        ctx.state.repo_dir = tmp_path
-        ctx.state.range_spec = "base..head"
-        monkeypatch.setattr(
-            "reviewforge.reasoning.single_pi.git_ops.run_git",
-            lambda _cwd, *args: "abc first\ndef second\n",
-        )
-
-        assert _commit_lines(ctx) == ["abc first", "def second"]
 
 class TestEngineRegistry:
     def test_built_in_engines_registered(self):

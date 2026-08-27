@@ -1105,7 +1105,7 @@ class TestPostToAdoStage:
                 ],
             },
         )
-        artifacts.dir.joinpath("posted-findings.json").write_text(
+        artifacts.dir.joinpath("posted-comments.json").write_text(
             json.dumps({"created": 1, "skipped": 0, "comments": []}),
             encoding="utf-8",
         )
@@ -1128,7 +1128,7 @@ class TestPostToAdoStage:
 
     def test_posting_calls_helper_and_records(self, cfg, artifacts, monkeypatch):
         cfg = replace(cfg, dry_run=False)
-        artifacts.dir.joinpath("posted-findings.json").write_text(
+        artifacts.dir.joinpath("posted-comments.json").write_text(
             json.dumps({"created": 1, "skipped": 0, "comments": []}),
             encoding="utf-8",
         )
@@ -1148,7 +1148,7 @@ class TestPostToAdoStage:
 
     def test_fail_on_triggered_marks_stage_failed_and_keeps_posted_result(self, cfg, artifacts, monkeypatch):
         cfg = replace(cfg, dry_run=False)
-        artifacts.dir.joinpath("posted-findings.json").write_text(
+        artifacts.dir.joinpath("posted-comments.json").write_text(
             json.dumps(
                 {
                     "summary": "ok",
@@ -1176,7 +1176,7 @@ class TestPostToAdoStage:
         monkeypatch.setattr("reviewforge.pipeline.stages.post_to_ado.call_helper", _helper)
         result = PostToAdoStage()(ctx)
         assert result.status == StageStatus.FAILED
-        assert builder.read_json(artifacts.dir / "posted-findings.json")["failOnTriggered"] is True
+        assert builder.read_json(artifacts.dir / "posted-comments.json")["failOnTriggered"] is True
 
     def test_posts_context_document_without_fragment_artifact(self, cfg, artifacts, monkeypatch):
         cfg = replace(cfg, dry_run=True)

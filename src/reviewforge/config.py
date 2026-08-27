@@ -264,8 +264,8 @@ class Config:
     #: When ``True``, the runner starts a fresh session, ignoring any
     #: prior state for the same session id.
     pi_session_clear: bool = field(default=False, compare=False)
-    #: Session id used by Pi. Defaults to ``pr-{pr_id}-review-{run_id}``
-    #: so the same PR reuses state across reruns.
+    #: Session id used by Pi. Defaults to ``pr-{pr_id}-review`` (with
+    #: ``-{run_id}`` appended when a run id is set) so re-runs resume.
     pi_session_id: str | None = field(default=None, compare=False)
     # --- CRG context enrichment -------------------------------------------
     #: When ``True``, run the CRG Tree-sitter enrichment stage between
@@ -721,6 +721,17 @@ def _build_from_sources(
     anchor_policy = cli_or_env("anchor_policy", "ANCHOR_POLICY", "downgrade").lower()
     if anchor_policy not in {"downgrade", "drop", "off"}:
         raise ConfigError("ANCHOR_POLICY must be 'downgrade', 'drop', or 'off'")
+    # Posting thresholds (env-only; no CLI flags exist). Mirrors from_env.
+    post_min_severity = cli_or_env("post_min_severity", "POST_MIN_SEVERITY", "none")
+    drop_low_confidence = is_true(cli_or_env("drop_low_confidence", "DROP_LOW_CONFIDENCE"))
+    require_context_for = cli_or_env("require_context_for", "REQUIRE_CONTEXT_FOR")
+    max_findings_raw = cli_or_env("max_findings", "MAX_FINDINGS")
+    try:
+        max_findings = int(max_findings_raw) if max_findings_raw else None
+    except ValueError:
+        max_findings = None
+    vote_waiting_on = cli_or_env("vote_waiting_on", "VOTE_WAITING_ON", "none")
+    fail_on = cli_or_env("fail_on", "FAIL_ON", "none")
     if model_backend != "pi":
         raise ConfigError(f"MODEL_BACKEND must be 'pi', got: {model_backend!r}")
 
@@ -804,6 +815,12 @@ def _build_from_sources(
         ),
         commit_context_max=commit_context_max,
         anchor_policy=anchor_policy,
+        post_min_severity=post_min_severity,
+        drop_low_confidence=drop_low_confidence,
+        require_context_for=require_context_for,
+        max_findings=max_findings,
+        vote_waiting_on=vote_waiting_on,
+        fail_on=fail_on,
         pr_url=pr_url,
         pi_session_id=pi_session_id,
         pi_session_enabled=pi_session_enabled,
