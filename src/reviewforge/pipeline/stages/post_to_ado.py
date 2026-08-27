@@ -20,7 +20,7 @@ from ..validation import validate_postable_review_doc
 
 def call_helper(cfg, command, artifact_dir, *, findings=None):
     assert command == "post-findings"
-    return post_findings(cfg, findings, artifact_dir / "posted-findings.json")
+    return post_findings(cfg, findings, artifact_dir / "posted-comments.json")
 
 
 
@@ -57,12 +57,12 @@ class PostToAdoStage(Stage):
         try:
             posted = call_helper(cfg, "post-findings", ctx.artifacts.dir, findings=ctx.artifacts.final)
         except ReviewForgeError:
-            path = ctx.artifacts.dir / "posted-findings.json"
+            path = ctx.artifacts.dir / "posted-comments.json"
             if path.exists():
                 ctx.posted = read_json(path) or {}
             raise
         if posted is None:
-            path = ctx.artifacts.dir / "posted-findings.json"
+            path = ctx.artifacts.dir / "posted-comments.json"
             posted = read_json(path) if path.exists() else {}
         ctx.posted = posted
         return {

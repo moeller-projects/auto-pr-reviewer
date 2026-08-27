@@ -92,7 +92,15 @@ class CalibrateSeverityStage(Stage):
             return {"findings": len(doc.get("findings", []))}
 
         _log(f"calibrating {len(verified_findings)} findings in parallel batches")
-        def run_one(idx: int, finding: dict[str, Any]) -> dict[str, Any]:
+        def _usage_for(runner: Any) -> dict[str, int]:
+            usage = getattr(runner, "last_tokens", {}) or {}
+            return {
+                "in": int(usage.get("in", 0) or 0),
+                "out": int(usage.get("out", 0) or 0),
+                "total": int(usage.get("total", 0) or 0),
+            }
+
+        def run_one(idx: int, finding: dict[str, Any]) -> tuple[int, dict[str, Any], dict[str, int]]:
             out = ctx.artifacts.dir / "raw" / f"severity-{idx}.json"
             payload = text + "\n\nFINDING:\n" + json.dumps(finding, ensure_ascii=False, sort_keys=True)
             if type(ctx.pi).__name__ in {"PiCliRunner", "PiRunner"}:
@@ -105,21 +113,33 @@ class CalibrateSeverityStage(Stage):
             else:
                 runner = ctx.pi
             runner.run_json(cfg.severity_prompt_path, payload, out, f"severity calibration {idx}")
-            return read_json(out) or {}
+            return idx, read_json(out) or {}, _usage_for(runner)
 
         merged: list[dict[str, Any]] = []
         summary_parts: list[str] = []
+        worker_tokens = {"in": 0, "out": 0, "total": 0}
+        ordered_docs: dict[int, dict[str, Any]] = {}
         import os
         max_workers = max(1, min(len(verified_findings), max(2, (os.cpu_count() or 2) // 2), 8))
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {pool.submit(run_one, i, f): i for i, f in enumerate(verified_findings, 1)}
             for fut in as_completed(futures):
-                idx = futures[fut]
-                raw_doc = fut.result()
+                idx, raw_doc, usage = fut.result()
                 doc = raw_doc if isinstance(raw_doc, dict) else {}
-                if doc.get("summary"):
-                    summary_parts.append(doc["summary"])
-                merged.append(_validated_calibration(doc, verified_findings[idx - 1]))
+                ordered_docs[idx] = doc
+                for key in worker_tokens:
+                    worker_tokens[key] += int(usage.get(key, 0) or 0)
+        for idx in sorted(ordered_docs):
+            doc = ordered_docs[idx]
+            if doc.get("summary"):
+                summary_parts.append(doc["summary"])
+            merged.append(_validated_calibration(doc, verified_findings[idx - 1]))
+        existing = ctx.extras.get("_worker_token_usage")
+        if not isinstance(existing, dict):
+            existing = {"in": 0, "out": 0, "total": 0}
+        for key in worker_tokens:
+            existing[key] = int(existing.get(key, 0) or 0) + worker_tokens[key]
+        ctx.extras["_worker_token_usage"] = existing
         doc = {"summary": " ".join(summary_parts).strip(), "findings": merged}
         validate_stage(doc, StageLabel.SEVERITY_CALIBRATION)
         write_json(ctx.artifacts.severity, doc)

@@ -43,7 +43,15 @@ class ExecuteReasoningEngineStage(Stage):
         try:
             write_json(
                 ctx.artifacts.sarif,
-                review_result_to_sarif(result, tool_version=__version__),
+                review_result_to_sarif(
+                    result,
+                    tool_version=__version__,
+                    repo_url=(
+                        f"https://dev.azure.com/{ctx.cfg.ado_org}/"
+                        f"{ctx.cfg.ado_project}/_git/{ctx.cfg.ado_repo_id}"
+                    ),
+                    pr_id=ctx.cfg.pr_id,
+                ),
             )
             sarif_written = True
         except Exception as exc:  # noqa: BLE001 - observability must not fail reviews

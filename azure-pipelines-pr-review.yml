@@ -1,5 +1,8 @@
 trigger: none
-pr: none
+pr:
+  branches:
+    include:
+      - "*"
 
 variables:
   IMAGE_NAME: reviewforge:$(Build.BuildId)
@@ -7,6 +10,8 @@ variables:
   FAIL_ON: none
   VOTE_WAITING_ON: major
   DRY_RUN: "false"
+  DISABLE_CHUNK_REVIEW: "0"
+  CHUNK_TRIGGER_DIFF_BYTES: "200000"
 
 pool:
   vmImage: ubuntu-latest

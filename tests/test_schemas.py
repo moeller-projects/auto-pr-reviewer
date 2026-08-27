@@ -10,6 +10,7 @@ from reviewforge.pipeline.schemas import (
     GoodPractice,
     ReviewSummary,
     RichEvidence,
+    RichFinding,
     Uncertainty,
     VerificationSummary,
 )
@@ -74,3 +75,23 @@ class TestRichEvidence:
     def test_valid_evidence_passes(self):
         evidence = RichEvidence.model_validate({"changedLines": [1], "whyNewInThisPr": "new in PR"})
         assert evidence.changedLines == [1]
+
+
+class TestRichFinding:
+    @staticmethod
+    def _payload():
+        return {
+            "title": "Bug",
+            "observation": "Something is wrong.",
+            "impact": "Users are affected.",
+            "recommendation": "Fix it.",
+            "severity": "major",
+        }
+
+    def test_evidence_is_required(self):
+        with pytest.raises(ValidationError):
+            RichFinding.model_validate(self._payload())
+
+    def test_evidence_cannot_be_null(self):
+        with pytest.raises(ValidationError):
+            RichFinding.model_validate(self._payload() | {"evidence": None})

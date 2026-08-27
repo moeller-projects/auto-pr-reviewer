@@ -31,6 +31,7 @@ the full context.
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
 import json
 import os
 import re
@@ -38,7 +39,7 @@ import subprocess
 import sys
 import tempfile
 
-from ..config import Config
+from ..config import Config, _ENV_ALIASES
 from ..exceptions import PiExecutionError
 from ..runlog import info as _log, warning as _warn
 from .prompts import augment_prompt_file
@@ -70,7 +71,7 @@ def strip_json_fences(path: Path) -> None:
 
 def _scrub_ado_env(env: dict[str, str]) -> None:
     """Remove ADO credentials from the subprocess env in place."""
-    for key in ("ADO_AUTH_TOKEN", "ADO_MCP_AUTH_TOKEN", "ADO_API_KEY"):
+    for key in dict.fromkeys((*_ENV_ALIASES.get("ado_token", ()), "AZURE_DEVOPS_EXT_PAT")):
         env.pop(key, None)
 
 
@@ -194,7 +195,8 @@ class PiCliRunner:
         cached = self._prompt_cache.get(prompt_path)
         if cached is not None:
             return cached
-        dest = self._prompt_dir / f"{prompt_path.stem}.lang.md"
+        path_hash = hashlib.sha1(str(prompt_path.resolve()).encode("utf-8")).hexdigest()[:8]
+        dest = self._prompt_dir / f"{prompt_path.stem}.{path_hash}.lang.md"
         augmented = augment_prompt_file(prompt_path, self.cfg, dest=dest)
         self._prompt_cache[prompt_path] = augmented
         return augmented

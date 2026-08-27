@@ -32,4 +32,4 @@ deduplication, handles comments whose line anchors move after a push.
 
 ## Other posting controls
 
-`POST_MIN_SEVERITY`, `DROP_LOW_CONFIDENCE`, `REQUIRE_CONTEXT_FOR`, `MAX_FINDINGS`, `VOTE_WAITING_ON`, and `FAIL_ON` control filtering, voting, and exit behavior. The primary configuration default for `POST_MIN_SEVERITY` is `none`; the legacy helper `post-findings` defaults to `minor` when unset. See [configuration](configuration.md) and [artifacts](artifacts.md).
+`POST_MIN_SEVERITY`, `DROP_LOW_CONFIDENCE`, `REQUIRE_CONTEXT_FOR`, `MAX_FINDINGS`, `VOTE_WAITING_ON`, and `FAIL_ON` control filtering, voting, and exit behavior. Both the pipeline and the legacy `post-findings` helper default `POST_MIN_SEVERITY` to `none`. See [configuration](configuration.md) and [artifacts](artifacts.md).

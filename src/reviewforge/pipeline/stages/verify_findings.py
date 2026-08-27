@@ -127,7 +127,15 @@ class VerifyFindingsStage(Stage):
         # uses ``Path.write_bytes`` which does NOT create parent dirs.
         ctx.artifacts.raw_dir.mkdir(parents=True, exist_ok=True)
 
-        def run_one(idx: int, finding: dict[str, Any]) -> dict[str, Any]:
+        def _usage_for(runner: Any) -> dict[str, int]:
+            usage = getattr(runner, "last_tokens", {}) or {}
+            return {
+                "in": int(usage.get("in", 0) or 0),
+                "out": int(usage.get("out", 0) or 0),
+                "total": int(usage.get("total", 0) or 0),
+            }
+
+        def run_one(idx: int, finding: dict[str, Any]) -> tuple[int, dict[str, Any], dict[str, int]]:
             out = ctx.artifacts.dir / "raw" / f"verify-{idx}.json"
             payload = text + "\n\nFINDING:\n" + json.dumps(finding, ensure_ascii=False, sort_keys=True)
             try:
@@ -140,27 +148,40 @@ class VerifyFindingsStage(Stage):
                 else:
                     runner = ctx.pi
                 runner.run_json(cfg.verify_prompt_path, payload, out, f"finding verification {idx}")
-                return read_json(out) or {}
+                return idx, read_json(out) or {}, _usage_for(runner)
             except BaseException as exc:
                 _log_worker_crash(idx, out, finding, exc)
                 raise
 
         merged: list[dict[str, Any]] = []
         summary_parts: list[str] = []
+        worker_tokens = {"in": 0, "out": 0, "total": 0}
+        ordered_docs: dict[int, dict[str, Any]] = {}
         import os
         max_workers = max(1, min(len(candidate_findings), max(2, (os.cpu_count() or 2) // 2), 8))
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {pool.submit(run_one, i, f): i for i, f in enumerate(candidate_findings, 1)}
             for fut in as_completed(futures):
                 try:
-                    doc = fut.result()
+                    idx, doc, usage = fut.result()
                 except BaseException as exc:
                     idx = futures[fut]
                     _log(f"finding verification {idx} future failed: {type(exc).__name__}: {exc}")
                     raise
-                if doc.get("summary"):
-                    summary_parts.append(doc.get("summary", ""))
-                merged.extend(doc.get("findings", []))
+                ordered_docs[idx] = doc
+                for key in worker_tokens:
+                    worker_tokens[key] += int(usage.get(key, 0) or 0)
+        for idx in sorted(ordered_docs):
+            doc = ordered_docs[idx]
+            if doc.get("summary"):
+                summary_parts.append(doc.get("summary", ""))
+            merged.extend(doc.get("findings", []))
+        existing = ctx.extras.get("_worker_token_usage")
+        if not isinstance(existing, dict):
+            existing = {"in": 0, "out": 0, "total": 0}
+        for key in worker_tokens:
+            existing[key] = int(existing.get(key, 0) or 0) + worker_tokens[key]
+        ctx.extras["_worker_token_usage"] = existing
         doc = {"summary": " ".join(summary_parts).strip(), "findings": merged}
         try:
             validate_stage(doc, StageLabel.FINDING_VERIFICATION)

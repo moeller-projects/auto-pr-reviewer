@@ -389,6 +389,22 @@ class TestLegacyPromptEmbeds:
         assert out == dest
         assert "English" in real_read_text(dest, encoding="utf-8")
 
+    def test_runner_uses_unique_augmented_prompt_paths_for_same_stem(self, cfg, tmp_path):
+        runner = PiRunner(cfg)
+        prompt_a = tmp_path / "a" / "prompt.md"
+        prompt_b = tmp_path / "b" / "prompt.md"
+        prompt_a.parent.mkdir(parents=True, exist_ok=True)
+        prompt_b.parent.mkdir(parents=True, exist_ok=True)
+        prompt_a.write_text("A", encoding="utf-8")
+        prompt_b.write_text("B", encoding="utf-8")
+
+        out_a = runner._resolve_system_prompt(prompt_a)
+        out_b = runner._resolve_system_prompt(prompt_b)
+
+        assert out_a != out_b
+        assert out_a.read_text(encoding="utf-8").startswith("A")
+        assert out_b.read_text(encoding="utf-8").startswith("B")
+
 
 class TestSessionIdInRunSummary:
     def test_run_summary_records_session_fields(self, cfg, monkeypatch):
@@ -772,9 +788,17 @@ class TestRepairStaysInSession:
 
         monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
         monkeypatch.setenv("ADO_AUTH_TOKEN", "secret")
+        monkeypatch.setenv("SYSTEM_ACCESSTOKEN", "secret2")
+        monkeypatch.setenv("AZURE_DEVOPS_EXT_PAT", "secret3")
         PiRunner(cfg).run_json(tmp_path / "p.md", "x", tmp_path / "out.json", "stage")
         for env in envs:
-            for k in ("ADO_AUTH_TOKEN", "ADO_MCP_AUTH_TOKEN", "ADO_API_KEY"):
+            for k in (
+                "SYSTEM_ACCESSTOKEN",
+                "ADO_AUTH_TOKEN",
+                "ADO_MCP_AUTH_TOKEN",
+                "ADO_API_KEY",
+                "AZURE_DEVOPS_EXT_PAT",
+            ):
                 assert k not in env
 
     def test_repair_sends_empty_stdin_in_session_mode(self, cfg, tmp_path, monkeypatch):
@@ -1211,4 +1235,3 @@ class TestTokenUsageObservability:
         )
         payload = json.loads(summary_path.read_text())
         assert payload["stages"][0]["details"]["token_usage_source"] == "stderr-regex"
-

@@ -54,6 +54,13 @@ class TestFromEnvBranches:
         with pytest.raises(ConfigError, match="ANCHOR_POLICY"):
             Config.from_env()
 
+    def test_from_env_does_not_mutate_chunk_trigger_env(self, base_env):
+        base_env.setenv("MAX_DIFF_BYTES", "123")
+        base_env.delenv("CHUNK_TRIGGER_DIFF_BYTES", raising=False)
+        cfg = Config.from_env()
+        assert cfg.chunk_trigger_diff_bytes == 123
+        assert "CHUNK_TRIGGER_DIFF_BYTES" not in __import__("os").environ
+
 
 class TestFromSourcesBranches:
     def test_invalid_anchor_policy_raises(self):
@@ -63,6 +70,19 @@ class TestFromSourcesBranches:
     def test_non_pi_backend_raises(self):
         with pytest.raises(ConfigError, match="MODEL_BACKEND"):
             Config.from_sources(env={"MODEL_BACKEND": "openai", "ADO_AUTH_TOKEN": "tok"})
+
+    def test_pi_session_fields_read_from_injected_env(self):
+        cfg = Config.from_sources(
+            env={
+                "ADO_AUTH_TOKEN": "tok",
+                "PI_SESSION_ID": "sid-1",
+                "PI_SESSION_ENABLED": "0",
+                "PI_SESSION_CLEAR": "1",
+            }
+        )
+        assert cfg.pi_session_id == "sid-1"
+        assert cfg.pi_session_enabled is False
+        assert cfg.pi_session_clear is True
 
 
 class TestFromEnvFile:

@@ -19,7 +19,18 @@ from ..ado.client import _normalize_org
 GIT_ASKPASS_SCRIPT = """\
 #!/usr/bin/env python3
 import os, sys
-print('x-access-token' if sys.argv[1].lower().find('username') >= 0 else os.environ['ADO_AUTH_TOKEN'])
+if sys.argv[1].lower().find('username') >= 0:
+    print('x-access-token')
+else:
+    token = (
+        os.environ.get('SYSTEM_ACCESSTOKEN')
+        or os.environ.get('ADO_AUTH_TOKEN')
+        or os.environ.get('ADO_MCP_AUTH_TOKEN')
+        or os.environ.get('ADO_API_KEY')
+        or os.environ.get('AZURE_DEVOPS_EXT_PAT')
+        or ''
+    )
+    print(token)
 """
 
 

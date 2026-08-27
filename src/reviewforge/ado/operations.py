@@ -499,13 +499,26 @@ def command_fetch_context(args: argparse.Namespace) -> int:
 
 def _filter_findings(
     findings: list[dict[str, Any]],
+    *,
+    post_min_severity: str | None = None,
+    drop_low_confidence: bool | None = None,
+    require_context_for: str | None = None,
+    max_findings: str | None = None,
 ) -> list[dict[str, Any]]:
     """Apply POST_MIN_SEVERITY / DROP_LOW_CONFIDENCE / REQUIRE_CONTEXT_FOR / MAX_FINDINGS."""
-    post_min = os.getenv("POST_MIN_SEVERITY", "minor")
-    if post_min not in SEV_RANK:
+    post_min = (post_min_severity or os.getenv("POST_MIN_SEVERITY", "none") or "none").strip().lower()
+    if post_min == "none":
+        post_min_rank: int | None = None
+    elif post_min in SEV_RANK:
+        post_min_rank = SEV_RANK[post_min]
+    else:
         fail(f"POST_MIN_SEVERITY must be one of: {list(SEV_RANK)}")
-    drop_low = is_true(os.getenv("DROP_LOW_CONFIDENCE"))
-    require_context_for_raw = os.getenv("REQUIRE_CONTEXT_FOR", "")
+    drop_low = (
+        bool(drop_low_confidence)
+        if drop_low_confidence is not None
+        else is_true(os.getenv("DROP_LOW_CONFIDENCE"))
+    )
+    require_context_for_raw = require_context_for if require_context_for is not None else os.getenv("REQUIRE_CONTEXT_FOR", "")
     require_context_for = {
         s.strip() for s in require_context_for_raw.split(",") if s.strip()
     } - {""}
@@ -517,7 +530,7 @@ def _filter_findings(
     filtered = [
         f
         for f in findings
-        if (post_min == "none" or SEV_RANK[f["severity"]] >= SEV_RANK[post_min])
+        if (post_min_rank is None or SEV_RANK[f["severity"]] >= post_min_rank)
         and not (drop_low and f.get("confidence") == "low")
     ]
     if require_context_for:
@@ -537,7 +550,7 @@ def _filter_findings(
                     continue
             kept.append(f)
         filtered = kept
-    max_findings_raw = os.getenv("MAX_FINDINGS")
+    max_findings_raw = max_findings if max_findings is not None else os.getenv("MAX_FINDINGS")
     max_findings: int | None = None
     if max_findings_raw:
         try:
@@ -560,7 +573,13 @@ def command_post_findings(args: argparse.Namespace) -> int:
     doc = extract_json(Path(args.findings))
     summary, findings = validate_findings(doc)
     parsed_count = len(findings)
-    findings = _filter_findings(findings)
+    findings = _filter_findings(
+        findings,
+        post_min_severity=getattr(args, "post_min_severity", None),
+        drop_low_confidence=getattr(args, "drop_low_confidence", None),
+        require_context_for=getattr(args, "require_context_for", None),
+        max_findings=getattr(args, "max_findings", None),
+    )
 
     pr = client.get_pr(args.pr)
     threads = client.get_threads(args.pr)
@@ -712,7 +731,10 @@ def command_post_findings(args: argparse.Namespace) -> int:
             result["stale_thread_ids"] = [e["threadId"] for e in stale]
             log(f"annotated {len(stale)} stale thread(s)")
 
-    vote_waiting_on = os.getenv("VOTE_WAITING_ON", "none")
+    vote_waiting_on = (
+        getattr(args, "vote_waiting_on", None) or os.getenv("VOTE_WAITING_ON", "none")
+    )
+    vote_waiting_on = vote_waiting_on.strip().lower()
     if vote_waiting_on != "none":
         if vote_waiting_on not in SEV_RANK:
             fail(f"VOTE_WAITING_ON must be one of: {list(SEV_RANK)}")
@@ -724,7 +746,7 @@ def command_post_findings(args: argparse.Namespace) -> int:
                 result["vote"] = {"reviewer_id": reviewer_id, "value": VOTE_WAITING}
                 result["votedWaitingForAuthor"] = True
 
-    fail_on = os.getenv("FAIL_ON", "none")
+    fail_on = (getattr(args, "fail_on", None) or os.getenv("FAIL_ON", "none")).strip().lower()
     if fail_on != "none" and any(
         SEV_RANK[f["severity"]] >= SEV_RANK.get(fail_on, 99) for f in findings
     ):
@@ -759,6 +781,24 @@ def fetch_pr_context(cfg: Any, out_dir: Path) -> dict[str, Any]:  # pragma: no c
     return read_json(out_dir / "context.json") or {}
 
 
+def _posting_arg(cfg: Any, name: str) -> Any:
+    """Return the cfg posting value, or ``None`` when it is the field default.
+
+    ``None`` lets ``command_post_findings`` fall back to the environment, so
+    a directly-constructed ``Config`` (e.g. in tests or embedders) does not
+    shadow ``POST_MIN_SEVERITY`` and friends with defaults.
+    """
+    import dataclasses
+    value = getattr(cfg, name, None)
+    try:
+        default = next(
+            f.default for f in dataclasses.fields(type(cfg)) if f.name == name
+        )
+    except (TypeError, StopIteration):
+        return value
+    return None if value == default else value
+
+
 def post_findings(cfg: Any, findings_path: Path, out_path: Path) -> dict[str, Any]:  # pragma: no cover
     args = SimpleNamespace(
         org=cfg.ado_org,
@@ -772,6 +812,12 @@ def post_findings(cfg: Any, findings_path: Path, out_path: Path) -> dict[str, An
         retry_base_delay=cfg.ado_retry_base_delay,
         retry_cap_delay=cfg.ado_retry_cap_delay,
         retry_budget_secs=cfg.ado_retry_budget_secs,
+        post_min_severity=_posting_arg(cfg, "post_min_severity"),
+        drop_low_confidence=_posting_arg(cfg, "drop_low_confidence"),
+        require_context_for=_posting_arg(cfg, "require_context_for"),
+        max_findings=str(_posting_arg(cfg, "max_findings") or ""),
+        vote_waiting_on=_posting_arg(cfg, "vote_waiting_on"),
+        fail_on=_posting_arg(cfg, "fail_on"),
     )
     code = command_post_findings(args)
     result = read_json(out_path) or {}

@@ -186,13 +186,14 @@ class ReviewDiffStage(Stage):
                 summary = f"{summary} (across {len(chunks)} diff chunks)"
             write_json(
                 ctx.artifacts.candidate,
-                {"summary": summary, "findings": findings_list},
+                {"summary": summary, "findings": findings_list, "chunks": len(chunks)},
             )
 
         doc = read_json(ctx.artifacts.candidate) or {"summary": "", "findings": []}
         # Normalize file paths once more on the consolidated doc.
         doc["findings"] = [_normalize_finding(f) for f in doc.get("findings", [])]
         write_json(ctx.artifacts.candidate, doc)
+        store_cached_json(cfg, "review_diff", review_cache_key, doc)
         ctx.candidate = doc
         return {
             "findings": len(doc.get("findings", [])),

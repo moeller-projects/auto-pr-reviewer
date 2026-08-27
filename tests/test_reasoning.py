@@ -35,9 +35,7 @@ from reviewforge.reasoning.single_pi import (  # noqa: E402
     SinglePiReasoningEngine,
     _build_single_pi_instruction,
     _build_synthesis_instruction,
-    _commit_lines,
     _diff_chunks,
-    _reduce_diff,
 )
 
 def _cfg(tmp_path: Path) -> Config:
@@ -189,50 +187,6 @@ class TestCanonicalReviewResultContract:
         with pytest.raises(Exception, match="reference"):
             ReviewResult.model_validate(payload)
 
-    @pytest.mark.parametrize(
-        ("diff", "limit"),
-        [
-            ("", 0),
-            ("diff --git a/a.py b/a.py\n@@ -1 +1 @@\n+é\n", 1),
-            ("diff --git a/a.py b/a.py\n@@ -1 +1 @@\n+changed\n", 24),
-            (
-                "diff --git a/a.py b/a.py\n@@ -1 +1 @@\n+one\n"
-                "diff --git a/b.py b/b.py\n@@ -1 +1 @@\n+two\n",
-                20,
-            ),
-            (
-                "".join(
-                    f"diff --git a/file{i}.py b/file{i}.py\n@@ -1 +1 @@\n+change{i}\n"
-                    for i in range(100)
-                ),
-                17,
-            ),
-        ],
-    )
-    def test_diff_reduction_never_exceeds_limit(self, diff, limit):
-        reduced, _ = _reduce_diff(diff, limit)
-        assert len(reduced.encode("utf-8")) <= limit
-
-    def test_diff_reduction_preserves_headers_when_budget_allows(self):
-        diff = (
-            "diff --git a/a.py b/a.py\n@@ -1 +1 @@\n+a\n"
-            "diff --git a/b.py b/b.py\n@@ -1 +1 @@\n+b\n"
-        )
-        reduced, was_reduced = _reduce_diff(diff, 70)
-        assert was_reduced is True
-        assert "diff --git a/a.py b/a.py" in reduced
-        assert "diff --git a/b.py b/b.py" in reduced
-
-    def test_diff_reduction_is_deterministic(self):
-        diff = "diff --git a/a.py b/a.py\n+é\n" * 20
-        assert _reduce_diff(diff, 31) == _reduce_diff(diff, 31)
-
-    def test_diff_at_exact_limit_is_unchanged(self):
-        diff = "diff --git a/a.py b/a.py\n+é\n"
-        reduced, was_reduced = _reduce_diff(diff, len(diff.encode("utf-8")))
-        assert reduced == diff
-        assert was_reduced is False
-
     def test_postable_projection_rejects_missing_evidence(self):
         with pytest.raises(ReviewForgeError, match="evidence"):
             validate_postable_review_doc(
@@ -249,12 +203,6 @@ class TestCanonicalReviewResultContract:
                 }
             )
 
-    def test_diff_without_sections_is_byte_truncated(self):
-        reduced, was_reduced = _reduce_diff("diff --git ", 5)
-        assert reduced == "diff "
-        assert was_reduced is True
-
-
 class TestChunkSynthesisHelpers:
     def test_synthesis_instruction_lists_findings_and_uncertainties(self):
         text = _build_synthesis_instruction(
@@ -269,19 +217,6 @@ class TestChunkSynthesisHelpers:
     def test_synthesis_instruction_handles_empty_merges(self):
         text = _build_synthesis_instruction(2, [], [])
         assert text.count("- none") == 2
-
-    def test_commit_lines_fall_back_to_git_log(self, tmp_path: Path, monkeypatch):
-        cfg = _cfg(tmp_path)
-        pi = MagicMock()
-        ctx = _stage_context(cfg, pi)
-        ctx.state.repo_dir = tmp_path
-        ctx.state.range_spec = "base..head"
-        monkeypatch.setattr(
-            "reviewforge.reasoning.single_pi.git_ops.run_git",
-            lambda _cwd, *args: "abc first\ndef second\n",
-        )
-
-        assert _commit_lines(ctx) == ["abc first", "def second"]
 
 class TestEngineRegistry:
     def test_built_in_engines_registered(self):
@@ -514,8 +449,33 @@ class TestSinglePiReasoningEngine:
         )
         assert _diff_chunks(diff, 55) == _diff_chunks(diff, 55)
 
+    def test_disable_chunk_review_forces_single_pass_even_over_max_bytes(self, tmp_path: Path):
+        cfg = replace(_cfg(tmp_path), max_diff_bytes=10, chunk_trigger_diff_bytes=1, disable_chunk_review=True)
+        pi = MagicMock()
+        pi.run_json.side_effect = lambda _p, _s, out, _st: builder.write_json(out, _valid_review_result_payload())
+        pi.last_tokens = {"in": 1, "out": 1, "total": 2}
+        ctx = _stage_context(cfg, pi)
+        ctx.state.diff_text = "diff --git a/a.py b/a.py\n" + ("+x\n" * 100)
+
+        result = SinglePiReasoningEngine().execute(ctx)
+
+        assert len(result.metrics.chunkTokenUsage) == 0
+        assert pi.run_json.call_count == 1
+
+    def test_chunk_trigger_threshold_prevents_chunking_for_small_diffs(self, tmp_path: Path):
+        cfg = replace(_cfg(tmp_path), max_diff_bytes=10, chunk_trigger_diff_bytes=10_000, disable_chunk_review=False)
+        pi = MagicMock()
+        pi.run_json.side_effect = lambda _p, _s, out, _st: builder.write_json(out, _valid_review_result_payload())
+        pi.last_tokens = {"in": 1, "out": 1, "total": 2}
+        ctx = _stage_context(cfg, pi)
+        ctx.state.diff_text = "diff --git a/a.py b/a.py\n" + ("+x\n" * 100)
+
+        SinglePiReasoningEngine().execute(ctx)
+
+        assert pi.run_json.call_count == 1
+
     def test_chunked_execution_dedupes_findings(self, tmp_path: Path):
-        cfg = replace(_cfg(tmp_path), max_diff_bytes=55)
+        cfg = replace(_cfg(tmp_path), max_diff_bytes=55, chunk_trigger_diff_bytes=1)
         pi = MagicMock()
         payload = _valid_review_result_payload()
         partials = [
@@ -560,7 +520,7 @@ class TestSinglePiReasoningEngine:
         assert ReviewResult.model_validate(result.model_dump())
 
     def test_chunked_execution_repeats_shared_context_and_records_usage(self, tmp_path: Path):
-        cfg = replace(_cfg(tmp_path), max_diff_bytes=55, pi_session_enabled=False)
+        cfg = replace(_cfg(tmp_path), max_diff_bytes=55, chunk_trigger_diff_bytes=1, pi_session_enabled=False)
         pi = MagicMock()
         prompts: list[str] = []
         token_usage = [
@@ -622,7 +582,7 @@ class TestSinglePiReasoningEngine:
         assert result.metadata.tokens.model_dump() == {"input": 25, "output": 10, "total": 35}
 
     def test_chunked_synthesis_failure_falls_back_to_boilerplate(self, tmp_path: Path):
-        cfg = replace(_cfg(tmp_path), max_diff_bytes=55)
+        cfg = replace(_cfg(tmp_path), max_diff_bytes=55, chunk_trigger_diff_bytes=1)
         pi = MagicMock()
         partial = {"findings": [], "uncertainties": []}
 
@@ -648,7 +608,7 @@ class TestSinglePiReasoningEngine:
         assert ReviewResult.model_validate(result.model_dump())
 
     def test_chunked_synthesis_invalid_json_falls_back(self, tmp_path: Path):
-        cfg = replace(_cfg(tmp_path), max_diff_bytes=55)
+        cfg = replace(_cfg(tmp_path), max_diff_bytes=55, chunk_trigger_diff_bytes=1)
         pi = MagicMock()
         partial = {"findings": [], "uncertainties": []}
 
@@ -674,7 +634,7 @@ class TestSinglePiReasoningEngine:
         assert ctx.extras["_synthesis_fallback"] is True
 
     def test_synthesis_fallback_flag_reaches_stage_details(self, tmp_path: Path):
-        cfg = replace(_cfg(tmp_path), max_diff_bytes=55)
+        cfg = replace(_cfg(tmp_path), max_diff_bytes=55, chunk_trigger_diff_bytes=1)
         pi = MagicMock()
         partial = {"findings": [], "uncertainties": []}
 
