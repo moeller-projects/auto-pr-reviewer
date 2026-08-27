@@ -266,11 +266,17 @@ class TestHttpMethods:
             resp = client.create_thread(1, {"comments": [{"content": "hi"}]})
         assert resp == {"id": 99}
 
-    def test_vote(self, monkeypatch):
-        client = AdoClient("contoso", "P", "api", token="t")
-        with _patch_urlopen({"vote": -5}):
+    def test_vote_retries_timeout_then_succeeds(self):
+        client = AdoClient(
+            "contoso", "P", "api", token="t", sleeper=MagicMock(), random_fn=lambda: 0
+        )
+        with patch(
+            "reviewforge.ado.client.urllib.request.urlopen",
+            side_effect=[TimeoutError("The read operation timed out"), _http_response({"vote": -5})],
+        ) as urlopen:
             resp = client.vote(1, "rev-1", -5)
         assert resp == {"vote": -5}
+        assert urlopen.call_count == 2
 
     def test_connection_data(self, monkeypatch):
         client = AdoClient("contoso", "P", "api", token="t")

@@ -6,6 +6,7 @@ from pathlib import Path
 import os
 import shutil
 import subprocess
+import time
 import tempfile
 import urllib.parse
 
@@ -83,6 +84,18 @@ def run_logged(desc: str, cmd: list[str], cwd: Path) -> None:
         )
 
 
+
+def run_logged_retry(desc: str, cmd: list[str], cwd: Path, *, attempts: int = 3) -> None:
+    """Run a logged command with a few retries for transient transport failures."""
+    for attempt in range(1, attempts + 1):
+        try:
+            run_logged(desc, cmd, cwd)
+            return
+        except GitOperationError:
+            if attempt == attempts:
+                raise
+            time.sleep(attempt)
+
 def _repo_url(cfg: Config) -> str:
     """Return the git remote URL for the configured ADO repository."""
     org_url, _ = _normalize_org(cfg.ado_org)
@@ -128,13 +141,13 @@ def prepare_repo(
         cwd=str(repo_dir),
     )
     target_ref, source_ref = "refs/pr-review/target", "refs/pr-review/source"
-    run_logged(
+    run_logged_retry(
         "git fetch target",
         ["git", "fetch", "--no-tags", "--depth=200", "origin",
          f"+refs/heads/{target_branch}:{target_ref}"],
         repo_dir,
     )
-    run_logged(
+    run_logged_retry(
         "git fetch source",
         ["git", "fetch", "--no-tags", "--depth=200", "origin",
          f"+refs/heads/{source_branch}:{source_ref}"],
@@ -154,13 +167,13 @@ def prepare_repo(
         increase = min(deepen, 10_000 - depths[-1])
         next_depth = depths[-1] + increase
         log(f"merge base unavailable at depth {depths[-1]}; deepening both refs to {next_depth}")
-        run_logged(
+        run_logged_retry(
             f"git fetch deepen target by {increase}",
             ["git", "fetch", "--no-tags", f"--deepen={increase}", "origin",
              f"+refs/heads/{target_branch}:{target_ref}"],
             repo_dir,
         )
-        run_logged(
+        run_logged_retry(
             f"git fetch deepen source by {increase}",
             ["git", "fetch", "--no-tags", f"--deepen={increase}", "origin",
              f"+refs/heads/{source_branch}:{source_ref}"],
@@ -174,13 +187,13 @@ def prepare_repo(
         )
         if is_shallow:
             log("merge base unavailable after bounded deepening; fetching both refs unshallow")
-            run_logged(
+            run_logged_retry(
                 "git fetch unshallow target",
                 ["git", "fetch", "--no-tags", "--unshallow", "origin",
                  f"+refs/heads/{target_branch}:{target_ref}"],
                 repo_dir,
             )
-            run_logged(
+            run_logged_retry(
                 "git fetch unshallow source",
                 ["git", "fetch", "--no-tags", "--unshallow", "origin",
                  f"+refs/heads/{source_branch}:{source_ref}"],

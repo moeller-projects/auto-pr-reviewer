@@ -188,6 +188,7 @@ class AdoClient:
             },
         )
         started = self._monotonic()
+        retryable_method = method in {"GET", "PUT"}
         for attempt in range(1, self.retry_attempts + 1):
             try:
                 with urllib.request.urlopen(req, timeout=60) as response:  # nosec - trusted URL
@@ -206,7 +207,7 @@ class AdoClient:
                 )
                 retry_after = exc.headers.get("Retry-After") if exc.headers else None
             except (urllib.error.URLError, TimeoutError) as exc:
-                retryable = method == "GET"
+                retryable = retryable_method
                 retry_after = None
                 error = AdoApiError(
                     f"[review][ERROR] ADO API {method} {url} failed: {exc.reason if isinstance(exc, urllib.error.URLError) else exc}",

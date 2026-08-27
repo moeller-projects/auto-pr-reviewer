@@ -71,8 +71,10 @@ RUN apt-get update \
 # Non-root runtime: the container clones with credentials and executes an
 # LLM-driven agent -- it should not run as root. Named volumes
 # (reviewforge-artifacts, reviewforge-crg-cache) inherit these ownerships.
+# HOME is pinned so Pi resolves config under /home/review, matching the
+# auth.json bind mount below.
 # /home/review/.pi/agent is pre-created so the auth.json bind mount lands in
-# a directory Pi (HOME=/home/review) can actually read and write sessions to.
+# a directory Pi can actually read and write sessions to.
 RUN useradd --uid 10001 --create-home review \
  && mkdir -p /workspace/artifacts /workspace/crg-cache /home/review/.pi/agent \
  && chown -R review:review /workspace /home/review/.pi
@@ -90,6 +92,7 @@ COPY --chown=review:review standards/ /app/standards/
 
 ENV PYTHONPATH=/app/src \
     PATH="/app/.venv/bin:/opt/pi/bin:$PATH" \
+    HOME=/home/review \
     WORKSPACE=/workspace \
     PI_SKIP_VERSION_CHECK=1 \
     PI_TELEMETRY=0 \

@@ -185,12 +185,11 @@ def run_command(args: argparse.Namespace) -> tuple[list[str], str, bool]:
     name = _value(args.container_name, "CONTAINER_NAME") or (f"review-pr-{overrides['PR_ID']}" if overrides["PR_ID"] else None)
     if name:
         command.extend(["--name", name])
-    artifact_path = _value(args.artifact_path, "ARTIFACT_PATH")
     auth_json_mount = _auth_json_mount_source()
     if auth_json_mount:
-        # HOME is /home/review (uid 10001); /root/.pi is never read by Pi.
         # Read-only: the container never needs to write the host's auth file.
         command.extend(["--volume", f"{auth_json_mount}:/home/review/.pi/agent/auth.json:ro"])
+    artifact_path = _value(args.artifact_path, "ARTIFACT_PATH")
     if artifact_path:
         Path(artifact_path).mkdir(parents=True, exist_ok=True)
         resolved_artifact_path = Path(artifact_path).resolve()
