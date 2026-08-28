@@ -242,6 +242,41 @@ class PiCliRunner:
                 break
         return result
 
+    def _run_process(
+        self,
+        cmd: list[str],
+        input_data: bytes,
+        stage: str,
+        env: dict[str, str],
+        *,
+        repair: bool = False,
+    ) -> subprocess.CompletedProcess[bytes]:
+        try:
+            cp = subprocess.run(
+                cmd,
+                input=input_data,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=self.cfg.pi_timeout_secs,
+                env=env,
+                **({"cwd": str(self._working_dir)} if self._working_dir else {}),
+            )
+        except subprocess.TimeoutExpired as exc:
+            message = (
+                f"[review][ERROR] Pi {stage} repair timed out"
+                if repair
+                else f"[review][ERROR] Pi {stage} timed out after {self.cfg.pi_timeout_secs}s"
+            )
+            raise PiExecutionError(message, details={"stage": stage, "repair": repair}) from exc
+        stderr_text = cp.stderr.decode(errors="replace")
+        for line in stderr_text.splitlines():
+            marker = " repair (in session)" if repair and self.cfg.pi_session_enabled else " repair" if repair else ""
+            _log(f"[pi {stage}{marker}] {line}")
+        self._record_context_reads(_parse_context_file_reads(stderr_text))
+        self._record_tokens(self._parse_token_usage(stderr_text))
+        return cp
+
+
     def run_json(
         self,
         prompt_path: Path,
@@ -249,47 +284,22 @@ class PiCliRunner:
         output_path: Path,
         stage: str,
     ) -> None:
-        """Run Pi and write the JSON output to ``output_path``.
-
-        On invalid JSON, retries once with a "return only JSON" repair
-        prompt that runs in the same session (no re-sending of context).
-
-        Raises :class:`PiExecutionError` on timeouts or unrecoverable errors.
-        """
-        instruction = (
-            "Process the task described in the system prompt. "
-            "The instruction and unified diff are provided on stdin."
-        )
+        """Run Pi and write the JSON output to ``output_path``."""
+        instruction = "Process the task described in the system prompt. The instruction and unified diff are provided on stdin."
         resolved_prompt = self._resolve_system_prompt(prompt_path)
-        cmd = self._build_cmd(resolved_prompt, instruction)
-        env = self._build_subprocess_env()
-
         sid = self.session_id if self.cfg.pi_session_enabled else "<no-session>"
         _log(
             f"running Pi {stage} (timeout: {self.cfg.pi_timeout_secs}s, "
             f"session: {sid}, clear: {self.cfg.pi_session_clear})"
         )
+        env = self._build_subprocess_env()
         self._invocation_count += 1
-        try:
-            cp = subprocess.run(
-                cmd,
-                input=stdin_text.encode(),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=self.cfg.pi_timeout_secs,
-                env=env,
-                **({"cwd": str(self._working_dir)} if self._working_dir else {}),
-            )
-        except subprocess.TimeoutExpired:
-            raise PiExecutionError(
-                f"[review][ERROR] Pi {stage} timed out after {self.cfg.pi_timeout_secs}s",
-                details={"stage": stage, "timeout_secs": self.cfg.pi_timeout_secs},
-            )
-        stderr_text = cp.stderr.decode(errors="replace")
-        for line in stderr_text.splitlines():
-            _log(f"[pi {stage}] {line}")
-        self._record_context_reads(_parse_context_file_reads(stderr_text))
-        self._record_tokens(self._parse_token_usage(stderr_text))
+        cp = self._run_process(
+            self._build_cmd(resolved_prompt, instruction),
+            stdin_text.encode(),
+            stage,
+            env,
+        )
         if cp.returncode:
             raise PiExecutionError(
                 f"[review][ERROR] pi {stage} exited {cp.returncode}",
@@ -297,13 +307,8 @@ class PiCliRunner:
             )
         output_path.write_bytes(cp.stdout)
         if not output_path.stat().st_size:
-            raise PiExecutionError(
-                f"[review][ERROR] pi {stage} produced no output",
-                details={"stage": stage},
-            )
+            raise PiExecutionError(f"[review][ERROR] pi {stage} produced no output", details={"stage": stage})
         self._warn_missing_token_usage(stage)
-
-        # First attempt: parse as-is.
         try:
             json.loads(output_path.read_text())
             return
@@ -314,43 +319,21 @@ class PiCliRunner:
             return
         except Exception:
             pass
-
-        # Repair attempt:
-        # - In session mode, the model already has the original context, so
-        #   we send empty stdin and just ask it to return only JSON.
-        # - In legacy / no-session mode, the model has no memory of the
-        #   original payload, so we resend it.
-        repair = self._build_cmd(
-            resolved_prompt,
-            "Your previous response was not valid JSON. "
-            "Return only the JSON object – no markdown fences, no prose.",
-        )
-        repair_input = b"" if self.cfg.pi_session_enabled else stdin_text.encode()
         _log(
             f"running Pi {stage} repair ({'in session' if self.cfg.pi_session_enabled else 'legacy mode'})"
         )
         self._invocation_count += 1
         self._repair_invocation_count += 1
-        try:
-            cp = subprocess.run(
-                repair,
-                input=repair_input,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=self.cfg.pi_timeout_secs,
-                env=env,
-                **({"cwd": str(self._working_dir)} if self._working_dir else {}),
-            )
-        except subprocess.TimeoutExpired:
-            raise PiExecutionError(
-                f"[review][ERROR] Pi {stage} repair timed out",
-                details={"stage": stage, "repair": True},
-            )
-        stderr_text = cp.stderr.decode(errors="replace")
-        for line in stderr_text.splitlines():
-            _log(f"[pi {stage} repair] {line}")
-        self._record_context_reads(_parse_context_file_reads(stderr_text))
-        self._record_tokens(self._parse_token_usage(stderr_text))
+        cp = self._run_process(
+            self._build_cmd(
+                resolved_prompt,
+                "Your previous response was not valid JSON. Return only the JSON object – no markdown fences, no prose.",
+            ),
+            b"" if self.cfg.pi_session_enabled else stdin_text.encode(),
+            stage,
+            env,
+            repair=True,
+        )
         if cp.returncode or not cp.stdout:
             raise PiExecutionError(
                 f"[review][ERROR] Pi {stage} repair call failed",
@@ -361,11 +344,11 @@ class PiCliRunner:
         strip_json_fences(output_path)
         try:
             json.loads(output_path.read_text())
-        except Exception:
+        except Exception as exc:
             raise PiExecutionError(
                 f"[review][ERROR] pi {stage} repair call produced invalid JSON",
                 details={"stage": stage, "repair": True},
-            )
+            ) from exc
 
 
 PiRunner = PiCliRunner

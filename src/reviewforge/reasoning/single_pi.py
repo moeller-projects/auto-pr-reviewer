@@ -73,142 +73,114 @@ def _runner_count(runner: Any, name: str) -> int:
     return value if isinstance(value, int) else 0
 
 
+def _context_pointer(context_dir: Any, filename: str, key: str) -> str | None:
+    return f".reviewforge-context/{filename} (key: {key})" if context_dir else None
+
+
+def _trim_review_state(review_context: Any, context_dir: Any) -> Any:
+    if not isinstance(review_context, dict):
+        return review_context
+    inline = dict(review_context)
+    for key in ("previousComments", "activeComments", "resolvedComments", "changedCommits", "changedFiles"):
+        values = inline.get(key)
+        if isinstance(values, list) and len(values) > _CONTEXT_MAX_REVIEW_ITEMS:
+            inline[key] = values[:_CONTEXT_MAX_REVIEW_ITEMS]
+    return inline
+
+
+def _review_state_pointers(review_context: Any, context_dir: Any) -> list[str]:
+    if not isinstance(review_context, dict) or not context_dir:
+        return []
+    return [
+        f"…and {len(review_context[key]) - _CONTEXT_MAX_REVIEW_ITEMS} more — full data: .reviewforge-context/review-state.json (key: {key})"
+        for key in ("previousComments", "activeComments", "resolvedComments", "changedCommits", "changedFiles")
+        if isinstance(review_context.get(key), list) and len(review_context[key]) > _CONTEXT_MAX_REVIEW_ITEMS
+    ]
+
+
+def _feedback_section(feedback: Any, context_dir: Any) -> list[str]:
+    if not feedback:
+        return []
+    section = (
+        render_section("\nPrevious review feedback:", feedback, _CONTEXT_MAX_ITEMS, _context_pointer(context_dir, "review-state.json", "previousFeedback"))
+        if len(feedback) > _CONTEXT_MAX_ITEMS
+        else "\nPrevious review feedback:\n" + json.dumps(feedback, ensure_ascii=False, sort_keys=True)
+    )
+    return [section, "\nDo not re-raise dismissed findings unless the implicated code changed in THIS diff. Treat fixed findings as addressed, but flag them when reintroduced and set regression=true."]
+
+
+def _prefix_review_state(ctx: StageContext, context_dir: Any) -> list[str]:
+    review_context = ctx.extras.get("review_context")
+    if not review_context:
+        return []
+    inline = _trim_review_state(review_context, context_dir)
+    pointers = _review_state_pointers(review_context, context_dir)
+    parts = ["\nDeterministic review state:\n" + json.dumps(inline, ensure_ascii=False, sort_keys=True) + ("\n" + "\n".join(pointers) if pointers else "")]
+    feedback = review_context.get("previousFeedback", []) if isinstance(review_context, dict) else []
+    parts.extend(_feedback_section(feedback, context_dir))
+    return parts
+
+
+def _prefix_graph_context(ctx: StageContext, context_dir: Any) -> list[str]:
+    parts = []
+    if crg := ctx.extras.get("crg_analysis"):
+        section = build_crg_section(crg, getattr(ctx.cfg, "crg_context_max_bytes", 8192), context_dir, render_section, _byte_cap_with_pointer)
+        if section:
+            parts.append("\nDeterministic graph context (Tree-sitter code-review graph):\n" + section)
+    if graph := ctx.extras.get("graph_context") and any(getattr(ctx.cfg, name, False) for name in ("graph_api_diff", "graph_flows", "graph_arch")):
+        section = build_wave2_section(ctx.extras["graph_context"], getattr(ctx.cfg, "graph_context_max_bytes", 12288), context_dir, render_section, _byte_cap_with_pointer)
+        if section:
+            parts.append("\n" + section)
+    return parts
+
+def _staging_section(index: Any, context_dir: Any) -> str:
+    if not isinstance(index, dict) or not context_dir:
+        return ""
+    names = "\n".join(
+        f"  - {name}: {info.get('description', '')}"
+        for name, info in sorted(index.items())
+        if isinstance(info, dict)
+    )
+    return "\nDeterministic context files:\n" + names + "\nInline sections are authoritative summaries; read the referenced files for complete data."
+
+
+def _changed_files_section(ctx: StageContext, context_dir: Any) -> str:
+    changed = list(getattr(ctx.state, "files", []) if ctx.state is not None else [])
+    if not changed and getattr(ctx, "files_text", ""):
+        changed = [line for line in ctx.files_text.splitlines() if line]
+    if changed and len(changed) > _CONTEXT_MAX_FILES:
+        return render_section("\nChanged files:", changed, _CONTEXT_MAX_FILES, _context_pointer(context_dir, "changed-files.json", "all entries"))
+    return "\nChanged files:\n" + (getattr(ctx, "files_text", "") or "\n".join(changed) or "(no changed files)")
+
+
+def _context_item_sections(ctx: StageContext, context_dir: Any) -> list[str]:
+    return [
+        render_section(f"\n{label}:", value if isinstance(value, list) else [value], _CONTEXT_MAX_ITEMS, _context_pointer(context_dir, filename, "all entries"))
+        for label, value, filename in (
+            ("Linked work items", ctx.extras.get("wi_context", []), "work-items.json"),
+            ("Existing PR comments", ctx.extras.get("thread_context", []), "threads.json"),
+        )
+        if value
+    ]
+
 def _build_single_pi_prefix(ctx: StageContext) -> str:
     """Build the shared non-diff prefix for single-pi prompts."""
-    metadata = ctx.metadata or (
-        read_json(ctx.artifacts.metadata) if ctx.artifacts.metadata.exists() else {}
-    )
+    metadata = ctx.metadata or (read_json(ctx.artifacts.metadata) if ctx.artifacts.metadata.exists() else {})
     context_dir = ctx.extras.get("context_staging_dir")
-    staging_index = ctx.extras.get("context_staging_index")
-
-    def pointer(filename: str, key: str) -> str | None:
-        if not context_dir:
-            return None
-        return f".reviewforge-context/{filename} (key: {key})"
-
     parts = [
         f"Single-call reasoning review for Azure DevOps PR #{ctx.cfg.pr_id}.",
         "Return only the rich ReviewResult JSON object defined in the system prompt.",
     ]
-    if isinstance(staging_index, dict) and context_dir:
-        files = [
-            f"  - {name}: {info.get('description', '')}"
-            for name, info in sorted(staging_index.items())
-            if isinstance(info, dict)
-        ]
-        parts.append(
-            "\nDeterministic context files:\n"
-            + "\n".join(files)
-            + "\nInline sections are authoritative summaries; read the referenced files for complete data."
-        )
+    if section := _staging_section(ctx.extras.get("context_staging_index"), context_dir):
+        parts.append(section)
     if metadata:
         parts += ["\nRepository/project metadata:", json.dumps(metadata, ensure_ascii=False)]
-
-    changed_files = list(getattr(ctx.state, "files", []) if ctx.state is not None else [])
-    if not changed_files and getattr(ctx, "files_text", ""):
-        changed_files = [line for line in ctx.files_text.splitlines() if line]
-    if changed_files and len(changed_files) > _CONTEXT_MAX_FILES:
-        parts.append(
-            render_section(
-                "\nChanged files:",
-                changed_files,
-                _CONTEXT_MAX_FILES,
-                pointer("changed-files.json", "all entries"),
-            )
-        )
-    else:
-        files_text = getattr(ctx, "files_text", "") or "\n".join(changed_files) or "(no changed files)"
-        parts += ["\nChanged files:", files_text]
-
-    all_commits = _all_commit_lines(ctx)
-    if all_commits:
-        parts.append(
-            render_section(
-                "\nCommits in this PR:",
-                all_commits,
-                getattr(ctx.cfg, "commit_context_max", 50),
-                pointer("commits.txt", "commits"),
-            )
-        )
-
-    for label, value, filename in (
-        ("Linked work items", ctx.extras.get("wi_context", []), "work-items.json"),
-        ("Existing PR comments", ctx.extras.get("thread_context", []), "threads.json"),
-    ):
-        if value:
-            parts.append(
-                render_section(
-                    f"\n{label}:",
-                    value if isinstance(value, list) else [value],
-                    _CONTEXT_MAX_ITEMS,
-                    pointer(filename, "all entries"),
-                )
-            )
-
-    if review_context := ctx.extras.get("review_context"):
-        review_inline = dict(review_context) if isinstance(review_context, dict) else review_context
-        review_pointers: list[str] = []
-        if isinstance(review_inline, dict):
-            review_inline = dict(review_inline)
-            for key in ("previousComments", "activeComments", "resolvedComments", "changedCommits", "changedFiles"):
-                values = review_inline.get(key)
-                if isinstance(values, list) and len(values) > _CONTEXT_MAX_REVIEW_ITEMS:
-                    review_inline[key] = values[:_CONTEXT_MAX_REVIEW_ITEMS]
-                    if context_dir:
-                        review_pointers.append(
-                            f"…and {len(values) - _CONTEXT_MAX_REVIEW_ITEMS} more — full data: "
-                            f".reviewforge-context/review-state.json (key: {key})"
-                        )
-        parts.append(
-            "\nDeterministic review state:\n"
-            + json.dumps(review_inline, ensure_ascii=False, sort_keys=True)
-            + ("\n" + "\n".join(review_pointers) if review_pointers else "")
-        )
-        feedback = review_context.get("previousFeedback", []) if isinstance(review_context, dict) else []
-        if feedback:
-            if len(feedback) <= _CONTEXT_MAX_ITEMS:
-                parts += [
-                    "\nPrevious review feedback:\n",
-                    json.dumps(feedback, ensure_ascii=False, sort_keys=True),
-                ]
-            else:
-                parts.append(
-                    render_section(
-                        "\nPrevious review feedback:",
-                        feedback,
-                        _CONTEXT_MAX_ITEMS,
-                        pointer("review-state.json", "previousFeedback"),
-                    )
-                )
-            parts.append(
-                "\nDo not re-raise dismissed findings unless the implicated code changed in THIS diff. "
-                "Treat fixed findings as addressed, but flag them when reintroduced and set regression=true."
-            )
-
-    if crg_analysis := ctx.extras.get("crg_analysis"):
-        _crg_summary = build_crg_section(
-            crg_analysis,
-            getattr(ctx.cfg, "crg_context_max_bytes", 8192),
-            context_dir,
-            render_section,
-            _byte_cap_with_pointer,
-        )
-        if _crg_summary:
-            parts += ["\nDeterministic graph context (Tree-sitter code-review graph):\n" + _crg_summary]
-    if graph_context := ctx.extras.get("graph_context"):
-        if any(
-            getattr(ctx.cfg, name, False)
-            for name in ("graph_api_diff", "graph_flows", "graph_arch")
-        ):
-            wave2 = build_wave2_section(
-                graph_context,
-                getattr(ctx.cfg, "graph_context_max_bytes", 12288),
-                context_dir,
-                render_section,
-                _byte_cap_with_pointer,
-            )
-            if wave2:
-                parts += ["\n" + wave2]
+    parts.append(_changed_files_section(ctx, context_dir))
+    if commits := _all_commit_lines(ctx):
+        parts.append(render_section("\nCommits in this PR:", commits, getattr(ctx.cfg, "commit_context_max", 50), _context_pointer(context_dir, "commits.txt", "commits")))
+    parts.extend(_context_item_sections(ctx, context_dir))
+    parts.extend(_prefix_review_state(ctx, context_dir))
+    parts.extend(_prefix_graph_context(ctx, context_dir))
     return "\n".join(parts)
 
 
@@ -272,6 +244,21 @@ def _build_chunk_instruction(
     return f"{prefix}\n\n{body}" if prefix else body
 
 
+def _synthesis_lines(
+    findings: list[dict[str, Any]], uncertainties: list[dict[str, Any]]
+) -> list[str]:
+    lines = []
+    for finding in findings:
+        location = finding.get("file") or "general"
+        if finding.get("line"):
+            location = f"{location}:{finding['line']}"
+        lines.append(f"- [{finding.get('severity', 'minor')}] {finding.get('title', '')} ({location})")
+    lines.append("- none" if not findings else "")
+    lines.append("Merged uncertainties across all chunks:")
+    lines.extend(f"- {item.get('topic', '')}" for item in uncertainties)
+    if not uncertainties:
+        lines.append("- none")
+    return lines
 def _build_synthesis_instruction(
     chunk_count: int,
     findings: list[dict[str, Any]],
@@ -284,26 +271,119 @@ def _build_synthesis_instruction(
         "",
         "Merged findings across all chunks:",
     ]
-    if findings:
-        for finding in findings:
-            location = finding.get("file") or "general"
-            if finding.get("line"):
-                location = f"{location}:{finding['line']}"
-            lines.append(f"- [{finding.get('severity', 'minor')}] {finding.get('title', '')} ({location})")
-    else:
-        lines.append("- none")
-    lines.append("")
-    lines.append("Merged uncertainties across all chunks:")
-    if uncertainties:
-        for item in uncertainties:
-            lines.append(f"- {item.get('topic', '')}")
-    else:
-        lines.append("- none")
-    lines.append("")
-    lines.append("Return only the chunk-synthesis JSON object defined in the system prompt.")
+    lines.extend(_synthesis_lines(findings, uncertainties))
+    lines.extend(["", "Return only the chunk-synthesis JSON object defined in the system prompt."])
     return "\n".join(lines)
 
 
+def _select_chunks(ctx: StageContext, diff_text: str) -> list[str]:
+    cfg = ctx.cfg
+    if cfg.disable_chunk_review:
+        log_warning("DISABLE_CHUNK_REVIEW enabled; forcing single-pass reasoning")
+        return [diff_text]
+    if len(diff_text.encode("utf-8")) <= cfg.chunk_trigger_diff_bytes:
+        return [diff_text]
+    log_warning(
+        f"diff exceeds CHUNK_TRIGGER_DIFF_BYTES ({cfg.chunk_trigger_diff_bytes}); "
+        "using chunked single-pi reasoning"
+    )
+    return _diff_chunks(diff_text, cfg.max_diff_bytes)
+
+
+def _single_pass(ctx: StageContext, cfg: Any) -> ReviewResult:
+    output_path = ctx.artifacts.raw_dir / "fast-review.json"
+    ctx.pi.run_json(cfg.fast_review_prompt_path, _build_single_pi_instruction(ctx), output_path, "single-pi reasoning")
+    raw = read_json(output_path)
+    if raw is None:
+        raise ReasoningEngineError("single-pi reasoning produced no JSON", details={"output_path": str(output_path)})
+    try:
+        return ReviewResult.model_validate(raw)
+    except Exception as exc:
+        raise SchemaValidationError("single-pi response does not match ReviewResult schema", details={"error": str(exc), "output_path": str(output_path)}) from exc
+
+
+def _merge_chunk(
+    partial: ChunkResult,
+    seen: set[tuple[str | None, int | None, str]],
+    findings: list[dict[str, Any]],
+    uncertainties: list[dict[str, Any]],
+) -> None:
+    for finding in partial.findings:
+        key = (finding.file, finding.line, _normalize_title(finding.title))
+        if key not in seen:
+            seen.add(key)
+            findings.append(finding.model_dump(by_alias=True))
+    uncertainties.extend(item.model_dump(by_alias=True) for item in partial.uncertainties)
+
+
+def _chunked_pass(
+    engine: Any, ctx: StageContext, cfg: Any, chunks: list[str]
+) -> tuple[ReviewResult, list[TokenUsage]]:
+    findings, uncertainties, usage = [], [], []
+    seen: set[tuple[str | None, int | None, str]] = set()
+    previous_tokens = _runner_usage(ctx.pi)
+    repeat_prefix = not cfg.pi_session_enabled or cfg.pi_session_clear
+    for index, chunk in enumerate(chunks, 1):
+        output_path = ctx.artifacts.raw_dir / f"fast-review-{index}.json"
+        ctx.pi.run_json(
+            cfg.fast_review_prompt_path,
+            _build_chunk_instruction(ctx, chunk, index, len(chunks), include_shared_prefix=repeat_prefix),
+            output_path,
+            f"single-pi chunk {index}/{len(chunks)}",
+        )
+        try:
+            partial = ChunkResult.model_validate(read_json(output_path))
+        except Exception as exc:
+            raise SchemaValidationError(
+                "single-pi chunk response does not match ChunkResult schema",
+                details={"error": str(exc), "output_path": str(output_path)},
+            ) from exc
+        current = _runner_usage(ctx.pi)
+        usage.append(
+            TokenUsage(
+                input=max(0, current.get("in", 0) - previous_tokens.get("in", 0)),
+                output=max(0, current.get("out", 0) - previous_tokens.get("out", 0)),
+                total=max(0, current.get("total", 0) - previous_tokens.get("total", 0)),
+            )
+        )
+        previous_tokens = current
+        _merge_chunk(partial, seen, findings, uncertainties)
+    synthesis = engine._synthesize(ctx, len(chunks), findings, uncertainties)
+    payload = (
+        {
+            "review_summary": synthesis.review_summary.model_dump(),
+            "verification_summary": synthesis.verification_summary.model_dump(),
+            "pr_summary": synthesis.pr_summary.model_dump(),
+            "good_practices": [gp.model_dump() for gp in synthesis.good_practices],
+        }
+        if synthesis is not None
+        else {
+            "review_summary": {"summary": f"Reviewed {len(chunks)} coherent diff chunks."},
+            "verification_summary": {"summary": "Reviewed each deterministic unified-diff chunk.", "approach": "chunked diff review"},
+            "pr_summary": {"implementation_summary": f"Reviewed {len(chunks)} unified-diff chunks."},
+        }
+    )
+    if synthesis is None:
+        ctx.extras["_synthesis_fallback"] = True
+    payload.update(findings=findings, uncertainties=uncertainties)
+    return ReviewResult.model_validate(payload), usage
+
+
+def _update_metrics(
+    result: ReviewResult, ctx: StageContext, started_at: float,
+    finished_at: float, reasoning_duration_ms: int, chunks: list[str], chunk_usage: list[TokenUsage],
+) -> ReviewResult:
+    tokens = _runner_usage(ctx.pi)
+    result.metrics = result.metrics.model_copy(update={
+        "piInputTokens": tokens.get("in", 0), "piOutputTokens": tokens.get("out", 0),
+        "piTotalTokens": tokens.get("total", 0), "invocationCount": _runner_count(ctx.pi, "invocation_count"),
+        "repairInvocationCount": _runner_count(ctx.pi, "repair_invocation_count"),
+        "wallClockDurationMs": int((finished_at - started_at) * 1000),
+        "reasoningDurationMs": reasoning_duration_ms, "projectionDurationMs": 0,
+        "validationDurationMs": 0, "changedFilesReviewed": len(getattr(ctx.state, "files", [])),
+        "chunkCount": len(chunks), "chunkTokenUsage": chunk_usage,
+    })
+    return result
 class SinglePiReasoningEngine(ReasoningEngine):
     """One Pi call that returns a full ``ReviewResult``."""
 
@@ -319,109 +399,20 @@ class SinglePiReasoningEngine(ReasoningEngine):
         diff_text = getattr(ctx.state, "diff_text", "") or (
             ctx.artifacts.diff.read_text(encoding="utf-8") if ctx.artifacts.diff.exists() else ""
         )
-        diff_bytes = len(diff_text.encode("utf-8"))
-        if cfg.disable_chunk_review:
-            log_warning("DISABLE_CHUNK_REVIEW enabled; forcing single-pass reasoning")
-            chunks = [diff_text]
-        elif diff_bytes <= cfg.chunk_trigger_diff_bytes:
-            chunks = [diff_text]
-        else:
-            log_warning(
-                f"diff exceeds CHUNK_TRIGGER_DIFF_BYTES ({cfg.chunk_trigger_diff_bytes}); "
-                "using chunked single-pi reasoning"
-            )
-            chunks = _diff_chunks(diff_text, cfg.max_diff_bytes)
+        chunks = _select_chunks(ctx, diff_text)
         started_at = time.time()
         reasoning_started = time.perf_counter()
-        chunk_usage: list[TokenUsage] = []
-
         if len(chunks) == 1:
-            output_path = ctx.artifacts.raw_dir / "fast-review.json"
-            ctx.pi.run_json(cfg.fast_review_prompt_path, _build_single_pi_instruction(ctx), output_path, "single-pi reasoning")
-            raw = read_json(output_path)
-            if raw is None:
-                raise ReasoningEngineError("single-pi reasoning produced no JSON", details={"output_path": str(output_path)})
-            try:
-                result = ReviewResult.model_validate(raw)
-            except Exception as exc:
-                raise SchemaValidationError("single-pi response does not match ReviewResult schema", details={"error": str(exc), "output_path": str(output_path)}) from exc
+            result = _single_pass(ctx, cfg)
+            chunk_usage: list[TokenUsage] = []
         else:
-            findings = []
-            uncertainties = []
-            seen: set[tuple[str | None, int | None, str]] = set()
-            previous_tokens = _runner_usage(ctx.pi)
-            repeat_shared_prefix = not cfg.pi_session_enabled or cfg.pi_session_clear
-            for index, chunk in enumerate(chunks, 1):
-                output_path = ctx.artifacts.raw_dir / f"fast-review-{index}.json"
-                ctx.pi.run_json(
-                    cfg.fast_review_prompt_path,
-                    _build_chunk_instruction(
-                        ctx,
-                        chunk,
-                        index,
-                        len(chunks),
-                        include_shared_prefix=repeat_shared_prefix,
-                    ),
-                    output_path,
-                    f"single-pi chunk {index}/{len(chunks)}",
-                )
-                raw = read_json(output_path)
-                try:
-                    partial = ChunkResult.model_validate(raw)
-                except Exception as exc:
-                    raise SchemaValidationError(
-                        "single-pi chunk response does not match ChunkResult schema",
-                        details={"error": str(exc), "output_path": str(output_path)},
-                    ) from exc
-                current_tokens = _runner_usage(ctx.pi)
-                chunk_usage.append(
-                    TokenUsage(
-                        input=max(0, current_tokens.get("in", 0) - previous_tokens.get("in", 0)),
-                        output=max(0, current_tokens.get("out", 0) - previous_tokens.get("out", 0)),
-                        total=max(0, current_tokens.get("total", 0) - previous_tokens.get("total", 0)),
-                    )
-                )
-                previous_tokens = current_tokens
-                for finding in partial.findings:
-                    key = (finding.file, finding.line, _normalize_title(finding.title))
-                    if key not in seen:
-                        seen.add(key)
-                        findings.append(finding.model_dump(by_alias=True))
-                uncertainties.extend(item.model_dump(by_alias=True) for item in partial.uncertainties)
-            synthesis = self._synthesize(ctx, len(chunks), findings, uncertainties)
-            if synthesis is not None:
-                payload: dict[str, Any] = {
-                    "review_summary": synthesis.review_summary.model_dump(),
-                    "verification_summary": synthesis.verification_summary.model_dump(),
-                    "pr_summary": synthesis.pr_summary.model_dump(),
-                    "good_practices": [gp.model_dump() for gp in synthesis.good_practices],
-                }
-            else:
-                ctx.extras["_synthesis_fallback"] = True
-                payload = {
-                    "review_summary": {"summary": f"Reviewed {len(chunks)} coherent diff chunks."},
-                    "verification_summary": {"summary": "Reviewed each deterministic unified-diff chunk.", "approach": "chunked diff review"},
-                    "pr_summary": {"implementation_summary": f"Reviewed {len(chunks)} unified-diff chunks."},
-                }
-            payload["findings"] = findings
-            payload["uncertainties"] = uncertainties
-            result = ReviewResult.model_validate(payload)
-
+            result, chunk_usage = _chunked_pass(self, ctx, cfg, chunks)
         reasoning_duration_ms = int((time.perf_counter() - reasoning_started) * 1000)
         tokens = _runner_usage(ctx.pi)
         ctx.last_token_usage = tokens
         finished_at = time.time()
         result = self._enrich_metadata(result, cfg, started_at, finished_at, tokens)
-        result.metrics = result.metrics.model_copy(update={
-            "piInputTokens": tokens.get("in", 0), "piOutputTokens": tokens.get("out", 0),
-            "piTotalTokens": tokens.get("total", 0), "invocationCount": _runner_count(ctx.pi, "invocation_count"),
-            "repairInvocationCount": _runner_count(ctx.pi, "repair_invocation_count"),
-            "wallClockDurationMs": int((finished_at - started_at) * 1000),
-            "reasoningDurationMs": reasoning_duration_ms, "projectionDurationMs": 0,
-            "validationDurationMs": 0, "changedFilesReviewed": len(getattr(ctx.state, "files", [])),
-            "chunkCount": len(chunks), "chunkTokenUsage": chunk_usage,
-        })
-        return result
+        return _update_metrics(result, ctx, started_at, finished_at, reasoning_duration_ms, chunks, chunk_usage)
 
     def _synthesize(
         self,

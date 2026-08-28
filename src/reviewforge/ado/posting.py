@@ -201,6 +201,32 @@ def _thread_has_bot_marker(
     return False
 
 
+def _stale_thread_entry(
+    thread: dict[str, Any],
+    existing_markers: set[str],
+    diff_anchors: dict[str, set[int]],
+    just_posted: set[int | str],
+) -> dict[str, Any] | None:
+    thread_id = thread.get("id")
+    if thread_id is None or thread_id in just_posted:
+        return None
+    if not _thread_has_bot_marker(thread, existing_markers):
+        return None
+    file_path, line = _extract_thread_anchor(thread)
+    if file_path is None or line is None:
+        return None
+    normalized = file_path.lstrip("/")
+    anchors = diff_anchors.get(normalized) or diff_anchors.get(file_path)
+    if anchors is not None and line in anchors:
+        return None
+    return {
+        "threadId": thread_id,
+        "file": normalized,
+        "line": line,
+        "reason": "file_no_longer_in_diff" if anchors is None else "line_no_longer_in_diff",
+    }
+
+
 def find_stale_bot_threads(
     threads: Iterable[dict[str, Any]],
     existing_markers: set[str],
@@ -208,52 +234,17 @@ def find_stale_bot_threads(
     *,
     just_posted_thread_ids: set[int | str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Return bot threads whose ``(file, line)`` is no longer in the current diff.
-
-    Parameters
-    ----------
-    threads
-        Threads as returned by :meth:`AdoClient.get_threads`.
-    existing_markers
-        Set of bot dedupe keys currently on the PR. Threads without a
-        key in this set are human / other-bot threads and skipped.
-    diff_anchors
-        ``{file_path: set_of_new_file_lines}`` mapping derived from
-        the current diff. Built with :meth:`DiffLineMapper.line_set`.
-    just_posted_thread_ids
-        Threads the bot created during this run. By definition their
-        anchors match the current diff → always skipped. Optional.
-    """
+    """Return bot threads whose ``(file, line)`` is no longer in the current diff."""
     just_posted = just_posted_thread_ids or set()
-    stale: list[dict[str, Any]] = []
-    for thread in threads:
-        thread_id = thread.get("id")
-        if thread_id is None or thread_id in just_posted:
-            continue
-        if not _thread_has_bot_marker(thread, existing_markers):
-            continue
-        file_path, line = _extract_thread_anchor(thread)
-        if file_path is None or line is None:
-            continue  # general or file-level comment → never stale
-        normalized = file_path.lstrip("/")
-        anchors = diff_anchors.get(normalized) or diff_anchors.get(file_path)
-        if anchors is None:
-            # File no longer in the diff → every line on it is stale.
-            stale.append({
-                "threadId": thread_id,
-                "file": normalized,
-                "line": line,
-                "reason": "file_no_longer_in_diff",
-            })
-            continue
-        if line not in anchors:
-            stale.append({
-                "threadId": thread_id,
-                "file": normalized,
-                "line": line,
-                "reason": "line_no_longer_in_diff",
-            })
+    stale = [
+        entry
+        for thread in threads
+        if (entry := _stale_thread_entry(thread, existing_markers, diff_anchors, just_posted))
+        is not None
+    ]
     return stale
+
+
 
 
 def stale_comment_body(*, short_sha: str | None = None) -> str:
@@ -282,19 +273,20 @@ class BotMarkers:
         return len(self.bot)
 
 
+def _thread_marker(thread: dict[str, Any]) -> str | None:
+    for comment in thread.get("comments") or []:
+        match = _MARKER_RE.search(comment.get("content") or "")
+        if match:
+            return match.group(1)
+    return None
+
+
 def classify_threads(threads: Iterable[dict[str, Any]]) -> BotMarkers:
     """Split threads into bot-authored (carrying a marker) and others."""
     bot: set[str] = set()
     human = 0
     for thread in threads or []:
-        comments = thread.get("comments") or []
-        marker = None
-        for c in comments:
-            text = c.get("content") or ""
-            match = _MARKER_RE.search(text)
-            if match:
-                marker = match.group(1)
-                break
+        marker = _thread_marker(thread)
         if marker:
             bot.add(marker)
         else:

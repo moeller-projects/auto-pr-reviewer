@@ -28,6 +28,132 @@ def _normalize_finding(f: dict[str, Any]) -> dict[str, Any]:
     return f
 
 
+def _merge_finding(
+    finding: dict[str, Any],
+    findings: list[dict[str, Any]],
+    seen: set[tuple],
+) -> None:
+    key = tuple(
+        finding.get(name) or (0 if name == "line" else "")
+        for name in ("file", "line", "severity", "title", "message")
+    )
+    if key not in seen:
+        seen.add(key)
+        findings.append(_normalize_finding(finding))
+
+def _fork_runner(ctx: StageContext, worker_id: int) -> Any:
+    if type(ctx.pi).__name__ in {"PiCliRunner", "PiRunner"}:
+        session_id = f"{ctx.pi.session_id}-chunk-{worker_id}"
+        return type(ctx.pi)(ctx.pi.cfg.with_overrides(pi_session_id=session_id))
+    return ctx.pi
+
+
+def _review_one(
+    ctx: StageContext,
+    cfg: Any,
+    diff: str,
+    files_text: str,
+    out_path: Any,
+    label: str = "",
+    truncated: bool = False,
+    pi_runner: Any = None,
+) -> tuple[dict[str, Any], dict[str, int]]:
+    text = review_instruction(
+        cfg, files_text, ctx.state,
+        ctx.extras.get("wi_context", []),
+        ctx.extras.get("wi_comments_context", []),
+        ctx.extras.get("thread_context", []),
+        ctx.artifacts.intent, ctx.artifacts.digest, label, truncated,
+    )
+    review_context = ctx.extras.get("review_context")
+    if review_context:
+        text += "\nDETERMINISTIC REVIEW STATE:\n" + json.dumps(review_context, ensure_ascii=False, sort_keys=True) + "\n"
+        feedback = review_context.get("previousFeedback", [])
+        if feedback:
+            text += "\nPREVIOUS REVIEW FEEDBACK:\n" + json.dumps(feedback, ensure_ascii=False, sort_keys=True) + "\nDo not re-raise dismissed findings unless the implicated code changed in THIS diff. Treat fixed findings as addressed, but flag them when reintroduced and set regression=true.\n"
+    runner = pi_runner or ctx.pi
+    runner.run_json(cfg.review_prompt_path, text + diff, out_path, "reviewer")
+    usage = getattr(runner, "token_usage", None)
+    usage = usage if isinstance(usage, dict) else getattr(runner, "last_tokens", {})
+    usage = usage if isinstance(usage, dict) else {}
+    if runner is ctx.pi:
+        ctx.last_token_usage = usage
+    return read_json(out_path) or {}, {key: int(usage.get(key, 0) or 0) for key in ("in", "out", "total")}
+
+
+def _merge_chunk_docs(
+    ordered_docs: list[tuple[dict[str, Any], dict[str, int]]],
+) -> tuple[list[dict[str, Any]], list[str], dict[str, int]]:
+    findings: list[dict[str, Any]] = []
+    summaries: list[str] = []
+    tokens = {"in": 0, "out": 0, "total": 0}
+    seen: set[tuple] = set()
+    for doc, usage in ordered_docs:
+        for key in tokens:
+            tokens[key] += usage[key]
+        summaries.append(doc.get("summary", ""))
+        for finding in doc.get("findings", []):
+            _merge_finding(finding, findings, seen)
+    return findings, summaries, tokens
+
+
+def _run_chunks(ctx: StageContext, cfg: Any, chunks: list[Any], run_one: Any) -> dict[str, Any]:
+    import os
+    max_workers = max(1, min(len(chunks), max(2, (os.cpu_count() or 2) // 2), 8))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {}
+        for i, chunk in enumerate(chunks, 1):
+            out = ctx.artifacts.dir / "raw" / f"chunk-{i}.json"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            futures[pool.submit(run_one, chunk.diff_text, chunk.files_text, out, f"chunk {i}/{len(chunks)}", chunk.truncated, _fork_runner(ctx, i))] = i
+        ordered = [None] * len(chunks)
+        for future in as_completed(futures):
+            ordered[futures[future] - 1] = future.result()
+    findings, summaries, tokens = _merge_chunk_docs(ordered)
+    ctx.extras["_worker_token_usage"] = tokens
+    summary = " ".join(item for item in summaries if item).strip()
+    if not summary:
+        summary = f"Reviewed {len(chunks)} diff chunks."
+    elif len(chunks) > 1:
+        summary = f"{summary} (across {len(chunks)} diff chunks)"
+    payload = {"summary": summary, "findings": findings, "chunks": len(chunks)}
+    write_json(ctx.artifacts.candidate, payload)
+    return payload
+def _review_cache_key(ctx: StageContext, cfg: Any) -> str:
+    metadata = {}
+    if ctx.artifacts.metadata.exists():
+        try:
+            metadata = read_json(ctx.artifacts.metadata) or {}
+        except Exception:
+            metadata = {}
+    return cache_key([
+        "review_diff", cfg.review_prompt_path.as_posix(),
+        metadata.get("sourceCommit"), metadata.get("targetCommit"),
+        metadata.get("lastMergeSourceCommit"), ctx.state.diff_text, ctx.files_text,
+        ctx.artifacts.intent, ctx.artifacts.digest,
+        ctx.extras.get("wi_context", []), ctx.extras.get("wi_comments_context", []),
+        ctx.extras.get("thread_context", []), ctx.extras.get("review_context", {}),
+        cfg.disable_chunk_review, cfg.chunk_trigger_diff_bytes, cfg.max_diff_bytes,
+    ])
+
+
+def _single_review(
+    ctx: StageContext, cfg: Any, run_one: Any, diff_bytes: int, cache: str
+) -> dict[str, Any]:
+    if cfg.disable_chunk_review and diff_bytes > cfg.chunk_trigger_diff_bytes:
+        _log("DISABLE_CHUNK_REVIEW enabled; reviewing large diff in single pass")
+    doc, _usage = run_one(ctx.state.diff_text, ctx.files_text, ctx.artifacts.candidate)
+    payload = {
+        "summary": doc.get("summary", ""),
+        "findings": [_normalize_finding(f) for f in doc.get("findings", [])],
+        "chunks": 0,
+    }
+    write_json(ctx.artifacts.candidate, payload)
+    store_cached_json(cfg, "review_diff", cache, payload)
+    ctx.candidate = payload
+    return {"findings": len(payload.get("findings", [])), "chunks": 0}
+
+
 class ReviewDiffStage(Stage):
     name = "review_diff"
 
@@ -38,95 +164,12 @@ class ReviewDiffStage(Stage):
         cfg = ctx.cfg
         if ctx.state is None:
             return {"findings": 0, "chunks": 0, "truncated": False}
-
-        ctx.artifacts.system_prompt.write_text(
-            ctx.extras.get("system_prompt", ""), encoding="utf-8"
+        ctx.artifacts.system_prompt.write_text(ctx.extras.get("system_prompt", ""), encoding="utf-8")
+        run_one = lambda diff, files, out, label="", truncated=False, pi_runner=None: _review_one(
+            ctx, cfg, diff, files, out, label, truncated, pi_runner
         )
-
-        def _fork_runner(worker_id: int):
-            if type(ctx.pi).__name__ in {"PiCliRunner", "PiRunner"}:
-                # Chunk workers run concurrently; each needs an isolated Pi
-                # session to avoid concurrent writes to shared session state.
-                session_id = f"{ctx.pi.session_id}-chunk-{worker_id}"
-                runner_cfg = ctx.pi.cfg.with_overrides(pi_session_id=session_id)
-                return type(ctx.pi)(runner_cfg)
-            return ctx.pi
-
-        def run_one(
-            diff: str,
-            files_text: str,
-            out_path,
-            label: str = "",
-            truncated: bool = False,
-            *,
-            pi_runner=None,
-        ) -> tuple[dict[str, Any], dict[str, int]]:
-            text = review_instruction(
-                cfg,
-                files_text,
-                ctx.state,
-                ctx.extras.get("wi_context", []),
-                ctx.extras.get("wi_comments_context", []),
-                ctx.extras.get("thread_context", []),
-                ctx.artifacts.intent,
-                ctx.artifacts.digest,
-                label,
-                truncated,
-            )
-            review_context = ctx.extras.get("review_context")
-            if review_context:
-                text += "\nDETERMINISTIC REVIEW STATE:\n" + json.dumps(
-                    review_context, ensure_ascii=False, sort_keys=True
-                ) + "\n"
-                feedback = review_context.get("previousFeedback", [])
-                if feedback:
-                    text += (
-                        "\nPREVIOUS REVIEW FEEDBACK:\n"
-                        + json.dumps(feedback, ensure_ascii=False, sort_keys=True)
-                        + "\nDo not re-raise dismissed findings unless the implicated code changed in THIS diff. "
-                        "Treat fixed findings as addressed, but flag them when reintroduced and set regression=true.\n"
-                    )
-            text += diff
-            runner = pi_runner or ctx.pi
-            runner.run_json(cfg.review_prompt_path, text, out_path, "reviewer")
-            usage = getattr(runner, "token_usage", None)
-            if not isinstance(usage, dict):
-                usage = getattr(runner, "last_tokens", {})
-            usage = usage if isinstance(usage, dict) else {}
-            if runner is ctx.pi:
-                ctx.last_token_usage = usage
-            return read_json(out_path) or {}, {
-                key: int(usage.get(key, 0) or 0) for key in ("in", "out", "total")
-            }
-
         diff_bytes = len(ctx.state.diff_text.encode())
-        metadata: dict[str, Any] = {}
-        if ctx.artifacts.metadata.exists():
-            try:
-                metadata = read_json(ctx.artifacts.metadata) or {}
-            except Exception:
-                # Corrupt metadata should not break the review. The cache
-                # key falls back to "" for the missing fields, which is
-                # still deterministic per run.
-                metadata = {}
-        review_cache_key = cache_key([
-            "review_diff",
-            cfg.review_prompt_path.as_posix(),
-            metadata.get("sourceCommit"),
-            metadata.get("targetCommit"),
-            metadata.get("lastMergeSourceCommit"),
-            ctx.state.diff_text,
-            ctx.files_text,
-            ctx.artifacts.intent,
-            ctx.artifacts.digest,
-            ctx.extras.get("wi_context", []),
-            ctx.extras.get("wi_comments_context", []),
-            ctx.extras.get("thread_context", []),
-            ctx.extras.get("review_context", {}),
-            cfg.disable_chunk_review,
-            cfg.chunk_trigger_diff_bytes,
-            cfg.max_diff_bytes,
-        ])
+        review_cache_key = _review_cache_key(ctx, cfg)
         cached = load_cached_json(cfg, "review_diff", review_cache_key)
         if cached:
             _log("review diff cache hit")
@@ -134,63 +177,11 @@ class ReviewDiffStage(Stage):
             ctx.candidate = cached
             return {"findings": len(cached.get("findings", [])), "chunks": cached.get("chunks", 0), "cached": True}
         if cfg.disable_chunk_review or diff_bytes <= cfg.chunk_trigger_diff_bytes:
-            if cfg.disable_chunk_review and diff_bytes > cfg.chunk_trigger_diff_bytes:
-                _log("DISABLE_CHUNK_REVIEW enabled; reviewing large diff in single pass")
-            doc, _usage = run_one(ctx.state.diff_text, ctx.files_text, ctx.artifacts.candidate)
-            payload = {"summary": doc.get("summary", ""), "findings": [_normalize_finding(f) for f in doc.get("findings", [])], "chunks": 0}
-            write_json(ctx.artifacts.candidate, payload)
-            store_cached_json(cfg, "review_diff", review_cache_key, payload)
-            ctx.candidate = payload
-            return {"findings": len(payload.get("findings", [])), "chunks": 0}
-        else:
-            _log("diff exceeds chunk trigger; splitting file-based chunks")
-            chunks, truncated_any = build_chunks(ctx.state, cfg.max_diff_bytes)
-            findings_list: list[dict[str, Any]] = []
-            summaries: list[str] = []
-            seen: set[tuple] = set()
-            import os
-            max_workers = max(1, min(len(chunks), max(2, (os.cpu_count() or 2) // 2), 8))
-            with ThreadPoolExecutor(max_workers=max_workers) as pool:
-                future_map = {}
-                for i, ch in enumerate(chunks, 1):
-                    out = ctx.artifacts.dir / "raw" / f"chunk-{i}.json"
-                    out.parent.mkdir(parents=True, exist_ok=True)
-                    future = pool.submit(run_one, ch.diff_text, ch.files_text, out, f"chunk {i}/{len(chunks)}", ch.truncated, pi_runner=_fork_runner(i))
-                    future_map[future] = (i, out)
-                ordered_docs: list[tuple[dict[str, Any], dict[str, int]]] = [None] * len(chunks)  # type: ignore[list-item]
-                for future in as_completed(future_map):
-                    idx, _out = future_map[future]
-                    ordered_docs[idx - 1] = future.result()
-                worker_tokens = {"in": 0, "out": 0, "total": 0}
-                for doc, usage in ordered_docs:
-                    for key in worker_tokens:
-                        worker_tokens[key] += usage[key]
-                    summaries.append(doc.get("summary", ""))
-                    for f in doc.get("findings", []):
-                        key = (
-                            f.get("file") or "",
-                            f.get("line") or 0,
-                            f.get("severity") or "",
-                            f.get("title") or "",
-                            f.get("message") or "",
-                        )
-                        if key in seen:
-                            continue
-                        seen.add(key)
-                        findings_list.append(_normalize_finding(f))
-            ctx.extras["_worker_token_usage"] = worker_tokens
-            summary = " ".join(s for s in summaries if s).strip()
-            if not summary:
-                summary = f"Reviewed {len(chunks)} diff chunks."
-            elif len(chunks) > 1:
-                summary = f"{summary} (across {len(chunks)} diff chunks)"
-            write_json(
-                ctx.artifacts.candidate,
-                {"summary": summary, "findings": findings_list, "chunks": len(chunks)},
-            )
-
+            return _single_review(ctx, cfg, run_one, diff_bytes, review_cache_key)
+        _log("diff exceeds chunk trigger; splitting file-based chunks")
+        chunks, _truncated = build_chunks(ctx.state, cfg.max_diff_bytes)
+        _run_chunks(ctx, cfg, chunks, run_one)
         doc = read_json(ctx.artifacts.candidate) or {"summary": "", "findings": []}
-        # Normalize file paths once more on the consolidated doc.
         doc["findings"] = [_normalize_finding(f) for f in doc.get("findings", [])]
         write_json(ctx.artifacts.candidate, doc)
         store_cached_json(cfg, "review_diff", review_cache_key, doc)

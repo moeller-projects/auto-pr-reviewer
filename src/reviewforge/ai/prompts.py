@@ -172,6 +172,42 @@ def stage_instruction(
     return "\n".join(parts)
 
 
+def _session_review(intent: Path, digest: Path, chunk_label: str, truncated: bool) -> str:
+    parts = [f"CHUNK LABEL: {chunk_label}"] if chunk_label else []
+    extras = [f"PR intent reconstruction: {intent}" if intent.exists() else "", f"Context digest: {digest}" if digest.exists() else ""]
+    extras = [item for item in extras if item]
+    if extras:
+        parts.append("Optional pre-digested artifacts (read with `read` tool if useful):\n  - " + "\n  - ".join(extras))
+    if truncated:
+        parts.append("NOTE: this chunk's diff was truncated due to size. Review only what is present and mention truncation in the summary.")
+    parts.append("The chunk's unified diff is on stdin. Produce only the JSON object defined in the system prompt.")
+    return "\n".join(parts) + "\n"
+
+
+def _review_thread_line(thread: dict[str, Any]) -> str:
+    loc = f"{thread.get('filePath')}:{thread.get('line')}" if thread.get("filePath") else "(general)"
+    return f"[{thread.get('author')}] {loc}: {str(thread.get('firstComment', ''))[:300]}"
+def _legacy_review(state: Any, threads: Any, intent: Path, digest: Path, chunk_label: str, truncated: bool) -> str:
+    parts = [
+        "Review unified diff provided on stdin.",
+        "The PR range merge-base(target, source)..source.",
+        f"Target branch: {state.target_branch}",
+        f"Source branch: {state.source_branch}",
+        f"Target commit: {state.target_commit}",
+        "Existing PR comments are already listed below. Do NOT create a finding for an issue already raised in those comments.\n",
+    ]
+    parts.extend(_review_thread_line(thread) for thread in threads or [])
+    if intent.exists():
+        parts += ["---", "PR INTENT RECONSTRUCTION", intent.read_text()]
+    if digest.exists():
+        parts += ["---", "CONTEXT DIGEST", digest.read_text(), "Use digest evidence. If a candidate issue is plausibly intentional according to context, do not report it."]
+    if truncated:
+        parts.append("NOTE: diff truncated due to size. Review only what is present and mention truncation in the summary.")
+    if chunk_label:
+        parts.append(f"CHUNK LABEL: {chunk_label}")
+    return "\n".join(parts) + "\nReturn ONLY JSON object defined in instructions.\n"
+
+
 def review_instruction(
     cfg: Config,
     files_text: str,
@@ -185,73 +221,10 @@ def review_instruction(
     truncated: bool = False,
 ) -> str:
     """Build the user-message for the actual diff-review stage."""
+    del files_text, wi, wi_comments
     if cfg.pi_session_enabled:
-        # In a session, the model already has the diff and metadata. The
-        # chunk-specific diff is on stdin. We only need to tell it which
-        # chunk it's looking at and remind it where the optional
-        # pre-digested artifacts live.
-        parts: list[str] = []
-        if chunk_label:
-            parts.append(f"CHUNK LABEL: {chunk_label}")
-        if intent.exists() or digest.exists():
-            extras = []
-            if intent.exists():
-                extras.append(f"PR intent reconstruction: {intent}")
-            if digest.exists():
-                extras.append(f"Context digest: {digest}")
-            parts.append(
-                "Optional pre-digested artifacts (read with `read` tool if useful):\n  - "
-                + "\n  - ".join(extras)
-            )
-        if truncated:
-            parts.append(
-                "NOTE: this chunk's diff was truncated due to size. Review "
-                "only what is present and mention truncation in the summary."
-            )
-        parts.append(
-            "The chunk's unified diff is on stdin. Produce only the JSON "
-            "object defined in the system prompt."
-        )
-        return "\n".join(parts) + "\n"
-
-    # Legacy / no-session: full context in the prompt.
-    parts: list[str] = [
-        "Review unified diff provided on stdin.",
-        "The PR range merge-base(target, source)..source.",
-        f"Target branch: {state.target_branch}",
-        f"Source branch: {state.source_branch}",
-        f"Target commit: {state.target_commit}",
-        (
-            "Existing PR comments are already listed below. Do NOT create a finding "
-            "for an issue already raised in those comments.\n"
-        ),
-    ]
-    for thread in threads or []:
-        loc = (
-            f"{thread.get('filePath')}:{thread.get('line')}"
-            if thread.get("filePath") else "(general)"
-        )
-        parts.append(
-            f"[{thread.get('author')}] {loc}: {str(thread.get('firstComment', ''))[:300]}"
-        )
-    if intent.exists():
-        parts += ["---", "PR INTENT RECONSTRUCTION", intent.read_text()]
-    if digest.exists():
-        parts += [
-            "---",
-            "CONTEXT DIGEST",
-            digest.read_text(),
-            "Use digest evidence. If a candidate issue is plausibly intentional "
-            "according to context, do not report it.",
-        ]
-    if truncated:
-        parts.append(
-            "NOTE: diff truncated due to size. Review only what is present and "
-            "mention truncation in the summary."
-        )
-    if chunk_label:
-        parts.append(f"CHUNK LABEL: {chunk_label}")
-    return "\n".join(parts) + "\nReturn ONLY JSON object defined in instructions.\n"
+        return _session_review(intent, digest, chunk_label, truncated)
+    return _legacy_review(state, threads, intent, digest, chunk_label, truncated)
 
 
 __all__ = ["review_instruction", "stage_instruction", "system_prompt"]

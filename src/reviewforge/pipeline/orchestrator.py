@@ -70,6 +70,23 @@ def ensure_tools(cfg: Config | None = None) -> None:
             )
 
 
+def _branch_skip(cfg: Config, metadata: dict[str, Any]) -> dict[str, Any] | None:
+    if not cfg.review_target_branches:
+        return None
+    allowed = {
+        x.strip().removeprefix("refs/heads/")
+        for x in cfg.review_target_branches.split(",")
+        if x.strip()
+    }
+    target = str(metadata.get("targetRefName") or "").removeprefix("refs/heads/")
+    if target and allowed and target not in allowed:
+        return {
+            "summary": f"Skipped: target branch {target!r} not in review policy {sorted(allowed)}.",
+            "findings": [],
+        }
+    return None
+
+
 def should_skip(cfg: Config, metadata: dict[str, Any]) -> dict[str, Any] | None:
     """Return a skip reason dict (or ``None``) for the current PR."""
     if cfg.force_review:
@@ -78,22 +95,7 @@ def should_skip(cfg: Config, metadata: dict[str, Any]) -> dict[str, Any] | None:
         return {"summary": "Skipped: PR is draft.", "findings": []}
     if (metadata.get("status") or "active") != "active":
         return {"summary": f"Skipped: PR status {metadata.get('status')}.", "findings": []}
-    if cfg.review_target_branches:
-        allowed = {
-            x.strip().removeprefix("refs/heads/")
-            for x in cfg.review_target_branches.split(",")
-            if x.strip()
-        }
-        target = str(metadata.get("targetRefName") or "").removeprefix("refs/heads/")
-        if target and allowed and target not in allowed:
-            return {
-                "summary": (
-                    f"Skipped: target branch {target!r} not in review policy "
-                    f"{sorted(allowed)}."
-                ),
-                "findings": [],
-            }
-    return None
+    return _branch_skip(cfg, metadata)
 
 
 # ---------------------------------------------------------------------------
