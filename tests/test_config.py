@@ -49,6 +49,17 @@ class TestFromEnvBranches:
         assert cfg.context_search_max_matches == 40
         assert cfg.collect_context_workers == 8
 
+    def test_zero_context_caps_are_preserved(self, base_env):
+        base_env.setenv("CONTEXT_FILE_MAX_LINES", "0")
+        base_env.setenv("CONTEXT_SEARCH_MAX_MATCHES", "0")
+        base_env.setenv("COLLECT_CONTEXT_WORKERS", "0")
+
+        cfg = Config.from_env()
+
+        assert cfg.context_file_max_lines == 0
+        assert cfg.context_search_max_matches == 0
+        assert cfg.collect_context_workers == 0
+
     def test_invalid_anchor_policy_raises(self, base_env):
         base_env.setenv("ANCHOR_POLICY", "bogus")
         with pytest.raises(ConfigError, match="ANCHOR_POLICY"):

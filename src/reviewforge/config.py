@@ -176,7 +176,7 @@ def _legacy_optional_int(name: str, default: int | None = None) -> int | None:
 
 def _legacy_context_caps() -> tuple[int, int, int]:
     return tuple(
-        _legacy_optional_int(name, default) or default
+        v if (v := _legacy_optional_int(name, default)) is not None else default
         for name, default in (
             ("CONTEXT_FILE_MAX_LINES", 260),
             ("CONTEXT_SEARCH_MAX_MATCHES", 40),

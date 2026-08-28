@@ -171,9 +171,14 @@ class EnrichWithCrgStage(Stage):
             _write_failure_document(ctx, tool_version=None, error="package unavailable")
             return {"crg_status": "package_unavailable"}
         graph_store, crg_inc, analyze_changes, parse_git_diff_ranges = modules
-        tool_version = "unknown"
+        tool_version = _crg_version()
+        if tool_version == "unknown":
+            # Modules import but the distribution metadata is missing: broken
+            # install — disable CRG instead of cache-keying under "unknown".
+            log_warning("CRG enrichment skipped: 'code-review-graph' distribution metadata is missing.")
+            _write_failure_document(ctx, tool_version=None, error="package metadata unavailable")
+            return {"crg_status": "package_unavailable"}
         try:
-            tool_version = _crg_version()
             store, build_mode, build_duration_ms, node_count = _build_graph(
                 ctx, repo_dir, changed_files, graph_store, crg_inc, tool_version
             )

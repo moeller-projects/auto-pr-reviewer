@@ -45,7 +45,7 @@ def _sum_tokens(a: dict[str, int], b: dict[str, int]) -> dict[str, int]:
 def _coverage_inputs(artifacts: Any) -> tuple[Any, str, list[str]]:
     work_items = read_json(artifacts.work_items) if artifacts.work_items.exists() else []
     diff_text = artifacts.diff.read_text(encoding="utf-8") if artifacts.diff.exists() else ""
-    changed_files = [f.get("file", "") for f in (read_json(artifacts.changed_files) or [])]
+    changed_files = ([f.get("file", "") for f in (read_json(artifacts.changed_files) or [])] if artifacts.changed_files.exists() else [])
     return work_items, diff_text, changed_files
 
 

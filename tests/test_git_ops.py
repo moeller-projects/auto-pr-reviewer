@@ -85,6 +85,15 @@ class TestUnshallowFallback:
         assert not any("--unshallow" in cmd for cmd in sim.logged)
         assert excinfo.value.details["depths"] == [200, 1200, 6200, 10000]
 
+    def test_failed_prepare_removes_temp_dirs(self, tmp_path, monkeypatch):
+        _GitSim(monkeypatch, shallow=False, unshallow_helps=False)
+
+        with pytest.raises(GitOperationError):
+            git_ops.prepare_repo(_cfg(tmp_path), "feature", "main")
+
+        assert list(tmp_path.iterdir()) == []
+
+
 class TestFetchRetries:
     def test_transient_fetch_failure_is_retried(self, tmp_path, monkeypatch):
         monkeypatch.setattr(git_ops, "_repo_url", lambda _cfg: "file:///remote")

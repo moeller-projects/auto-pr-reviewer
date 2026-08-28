@@ -306,7 +306,7 @@ class TemplateCommentFormatter:
             "severity": severity,
             "severity_label": SEVERITY_LABEL.get(severity, severity),
             "confidence": str(finding.get("confidence") or ""),
-            "context_basis": str(finding.get("contextBasis") or ""),
+            "context_basis": str(finding.get("contextBasis") or finding.get("context_basis") or ""),
             "suggestion": str(finding.get("suggestion") or ""),
             "file": str(finding.get("file") or ""),
             "line": finding.get("line"),

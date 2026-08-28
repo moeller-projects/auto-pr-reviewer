@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import subprocess
+import tempfile
 from pathlib import Path, PureWindowsPath
 
 import pytest
@@ -139,6 +140,30 @@ class TestEnvFile:
             assert "UNRELATED_SECRET=nope" not in text
         finally:
             Path(path).unlink(missing_ok=True)
+
+    def test_values_with_newlines_are_skipped(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ADO_ORG", "contoso\nINJECTED=1")
+        path, temporary = ops._env_file(str(tmp_path / "absent.env"))
+        try:
+            text = Path(path).read_text(encoding="utf-8")
+            assert "INJECTED" not in text
+        finally:
+            Path(path).unlink(missing_ok=True)
+
+    def test_cmd_run_unlinks_temp_env_file_on_failure(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PI_AUTH_JSON_PATH", str(tmp_path / "missing-auth.json"))
+
+        def boom(_args):
+            raise RuntimeError("run_command blew up")
+
+        monkeypatch.setattr(ops, "_run_overrides", boom)
+        args = _run_args(tmp_path, "--runtime", "docker")
+
+        before = set(Path(tempfile.gettempdir()).glob("reviewforge-*.env"))
+        with pytest.raises(RuntimeError, match="blew up"):
+            ops.cmd_run(args)
+        after = set(Path(tempfile.gettempdir()).glob("reviewforge-*.env"))
+        assert after == before
 
 
 class TestMountSources:

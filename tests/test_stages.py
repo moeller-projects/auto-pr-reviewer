@@ -879,6 +879,21 @@ class TestReviewDiffStage:
         assert result.status == StageStatus.SKIPPED
         assert result.details == {}
 
+    def test_duplicate_finding_merges_missing_extras(self):
+        from reviewforge.pipeline.stages.review_diff import _merge_finding
+
+        first = {"severity": "major", "title": "T", "message": "M", "file": "a.py", "line": 5}
+        duplicate = dict(first, evidence=[{"quote": "x"}], regression=True)
+        findings: list[dict] = []
+        seen: dict = {}
+
+        _merge_finding(first, findings, seen)
+        _merge_finding(duplicate, findings, seen)
+
+        assert len(findings) == 1
+        assert findings[0]["evidence"] == [{"quote": "x"}]
+        assert findings[0]["regression"] is True
+
     def test_skips_when_diff_is_empty(self, cfg, artifacts):
         ctx = _stage_context(cfg, artifacts, MagicMock(), state=self._state("", []))
         result = ReviewDiffStage()(ctx)
@@ -1599,6 +1614,15 @@ class TestEnrichWithCrgStage:
         ctx.state = None
         stage = EnrichWithCrgStage()
         assert stage.should_run(ctx) is False
+
+    def test_missing_distribution_metadata_disables_crg(self, cfg, artifacts, tmp_path, monkeypatch):
+        _install_fake_crg(monkeypatch, version="unknown")
+        crg_cfg = replace(cfg, crg_enabled=True)
+        state = self._make_state(tmp_path)
+
+        result, _ctx = self._run_ctx(crg_cfg, artifacts, state)
+
+        assert result.details.get("crg_status") == "package_unavailable"
 
     def test_skips_when_review_mode_no_op(self, cfg, artifacts, tmp_path):
         from reviewforge.pipeline.crg import EnrichWithCrgStage

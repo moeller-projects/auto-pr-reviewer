@@ -139,6 +139,8 @@ def _env_file(path: str) -> tuple[str, bool]:
     try:
         for key, value in os.environ.items():
             if key in _ENV_ALLOWLIST_KEYS or key.startswith(_ENV_ALLOWLIST_PREFIXES):
+                if "\n" in value or "\r" in value:
+                    continue
                 handle.write(f"{key}={value}\n")
     finally:
         handle.close()
@@ -229,12 +231,17 @@ def _append_run_options(
 
 def run_command(args: argparse.Namespace) -> tuple[list[str], str, bool]:
     env_file, temporary = _env_file(args.env_file)
-    selected_runtime = runtime(args.runtime)
-    image = _value(args.image, "IMAGE_NAME", _value(None, "IMAGE", "reviewforge:latest"))
-    overrides = _run_overrides(args)
-    command = [selected_runtime, "run"]
-    _append_run_options(command, args, selected_runtime, overrides, env_file)
-    command.append(image)
+    try:
+        selected_runtime = runtime(args.runtime)
+        image = _value(args.image, "IMAGE_NAME", _value(None, "IMAGE", "reviewforge:latest"))
+        overrides = _run_overrides(args)
+        command = [selected_runtime, "run"]
+        _append_run_options(command, args, selected_runtime, overrides, env_file)
+        command.append(image)
+    except Exception:
+        if temporary:
+            Path(env_file).unlink(missing_ok=True)
+        raise
     return command, env_file, temporary
 
 

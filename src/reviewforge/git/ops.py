@@ -245,21 +245,26 @@ def prepare_repo(
     repo_dir, cleanup_paths, target_ref, source_ref = _initialize_repo(
         cfg, source_branch, target_branch
     )
-    base = _ensure_merge_base(
-        repo_dir, source_branch, target_branch, target_ref, source_ref
-    )
-    target_commit = run_git(repo_dir, "rev-parse", "--verify", f"{target_ref}^{{commit}}").strip()
-    source_commit = run_git(repo_dir, "rev-parse", "--verify", f"{source_ref}^{{commit}}").strip()
-    log(f"target {target_branch} -> {target_commit}")
-    log(f"source {source_branch} -> {source_commit}")
-    log(f"merge-base -> {base}")
-    run_logged("git checkout source", ["git", "checkout", source_commit], repo_dir)
-    range_spec = _review_range(repo_dir, base, source_commit, reviewed_commit)
-    diff = run_git(repo_dir, "diff", "--unified=3", "--no-ext-diff", range_spec)
-    files = [
-        line for line in run_git(repo_dir, "diff", "--name-only", "--no-ext-diff", range_spec).splitlines()
-        if line
-    ]
+    try:
+        base = _ensure_merge_base(
+            repo_dir, source_branch, target_branch, target_ref, source_ref
+        )
+        target_commit = run_git(repo_dir, "rev-parse", "--verify", f"{target_ref}^{{commit}}").strip()
+        source_commit = run_git(repo_dir, "rev-parse", "--verify", f"{source_ref}^{{commit}}").strip()
+        log(f"target {target_branch} -> {target_commit}")
+        log(f"source {source_branch} -> {source_commit}")
+        log(f"merge-base -> {base}")
+        run_logged("git checkout source", ["git", "checkout", source_commit], repo_dir)
+        range_spec = _review_range(repo_dir, base, source_commit, reviewed_commit)
+        diff = run_git(repo_dir, "diff", "--unified=3", "--no-ext-diff", range_spec)
+        files = [
+            line for line in run_git(repo_dir, "diff", "--name-only", "--no-ext-diff", range_spec).splitlines()
+            if line
+        ]
+    except Exception:
+        for path in cleanup_paths:
+            shutil.rmtree(path, ignore_errors=True)
+        raise
     return RepoState(
         repo_dir, source_branch, target_branch, base, source_commit, target_commit,
         diff, files, range_spec, cleanup_paths,

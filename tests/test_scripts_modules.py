@@ -902,6 +902,19 @@ class TestDiffMapper:
         files = diff_mapper.collect_changed_files(self.DIFF)
         assert files == ["src/app.py"]
 
+    def test_deleted_file_diff_does_not_yield_dev_null(self):
+        deletion = (
+            "diff --git a/old.py b/old.py\n"
+            "deleted file mode 100644\n"
+            "--- a/old.py\n"
+            "+++ /dev/null\n"
+            "@@ -1,2 +0,0 @@\n"
+            "-gone\n"
+            "-away\n"
+        )
+        files = diff_mapper.collect_changed_files(deletion)
+        assert "/dev/null" not in files
+
     def test_exact_line_maps_to_hunk_start(self):
         ctx = diff_mapper.map_file_line_to_diff_position("src/app.py", 3, diff_text=self.DIFF)
         assert ctx is not None

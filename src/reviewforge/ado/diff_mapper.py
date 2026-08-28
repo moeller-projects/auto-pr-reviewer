@@ -98,6 +98,8 @@ def _parse_file_header(raw_line: str) -> _FileDiff | None:
     if not match:
         return None
     path = match.group("path").strip()
+    if path == "/dev/null":
+        return None
     return _FileDiff(path=path[2:] if path.startswith("b/") else path)
 
 

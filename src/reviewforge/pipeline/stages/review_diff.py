@@ -31,15 +31,23 @@ def _normalize_finding(f: dict[str, Any]) -> dict[str, Any]:
 def _merge_finding(
     finding: dict[str, Any],
     findings: list[dict[str, Any]],
-    seen: set[tuple],
+    seen: dict[tuple, dict[str, Any]],
 ) -> None:
     key = tuple(
         finding.get(name) or (0 if name == "line" else "")
         for name in ("file", "line", "severity", "title", "message")
     )
-    if key not in seen:
-        seen.add(key)
-        findings.append(_normalize_finding(finding))
+    kept = seen.get(key)
+    if kept is None:
+        kept = _normalize_finding(finding)
+        seen[key] = kept
+        findings.append(kept)
+    else:
+        # Duplicate from another chunk: adopt non-keyed extras the kept
+        # finding is missing (e.g. evidence, regression).
+        for name, value in finding.items():
+            if not kept.get(name) and value:
+                kept[name] = value
 
 def _fork_runner(ctx: StageContext, worker_id: int) -> Any:
     if type(ctx.pi).__name__ in {"PiCliRunner", "PiRunner"}:
@@ -87,7 +95,7 @@ def _merge_chunk_docs(
     findings: list[dict[str, Any]] = []
     summaries: list[str] = []
     tokens = {"in": 0, "out": 0, "total": 0}
-    seen: set[tuple] = set()
+    seen: dict[tuple, dict[str, Any]] = {}
     for doc, usage in ordered_docs:
         for key in tokens:
             tokens[key] += usage[key]
