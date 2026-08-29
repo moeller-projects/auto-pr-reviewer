@@ -31,6 +31,7 @@ ARTIFACT_NAMES: tuple[str, ...] = (
     "run.log",
     "crg-analysis.json",
     "graph-context.json",
+    "comment-replies.json",
 )
 
 
@@ -58,6 +59,7 @@ class Artifacts:
     review_result: Path
     sarif: Path
     posted: Path
+    comment_replies: Path
     summary: Path
     system_prompt: Path
     raw_dir: Path
@@ -84,6 +86,7 @@ class Artifacts:
             "review-result.json": str(self.review_result),
             "sarif-findings.json": str(self.sarif),
             "posted-comments.json": str(self.posted),
+            "comment-replies.json": str(self.comment_replies),
             "run-summary.json": str(self.summary),
             "review-system.combined.md": str(self.system_prompt),
             "work-items.json": str(self.work_items),
@@ -140,6 +143,7 @@ def create(cfg: Config) -> Artifacts:
         review_result=root / "review-result.json",
         sarif=root / "sarif-findings.json",
         posted=root / "posted-comments.json",
+        comment_replies=root / "comment-replies.json",
         summary=root / "run-summary.json",
         system_prompt=root / "review-system.combined.md",
         raw_dir=root / "raw",

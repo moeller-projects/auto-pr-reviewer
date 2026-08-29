@@ -126,6 +126,18 @@ class AcCoverageLlmResult(_Base):
     covered: bool
     reason: str = ""
 
+class CommentReply(_Base):
+    """A model-drafted reply to one existing PR comment thread."""
+
+    thread_id: int
+    reply: str
+
+
+class CommentReplies(_Base):
+    """Model output for the reply-to-comments stage."""
+
+    replies: list[CommentReply] = Field(default_factory=list)
+
 
 # ---------------------------------------------------------------------------
 # Reasoning Engine: canonical rich review result
@@ -410,6 +422,8 @@ def load_and_validate(path: Path, schema: type[_Base]) -> _Base:
 __all__ = [
     "AcCoverageLlmResult",
     "ChunkSynthesis",
+    "CommentReplies",
+    "CommentReply",
     "Confidence",
     "ContextBasis",
     "ContextDigest",

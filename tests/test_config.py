@@ -72,6 +72,39 @@ class TestFromEnvBranches:
         assert cfg.chunk_trigger_diff_bytes == 123
         assert "CHUNK_TRIGGER_DIFF_BYTES" not in __import__("os").environ
 
+    def test_legacy_constructor_reads_reply_settings(self, base_env, tmp_path):
+        prompt = tmp_path / "reply.md"
+        prompt.write_text("reply prompt", encoding="utf-8")
+        base_env.setenv("REPLY_COMMENTS", "0")
+        base_env.setenv("COMMENT_REPLY_PROMPT_PATH", str(prompt))
+
+        cfg = Config.from_env()
+
+        assert cfg.reply_comments is False
+        assert cfg.comment_reply_prompt_path == prompt
+
+
+    def test_reply_prompt_validation_is_pipeline_specific(self, tmp_path):
+        missing = tmp_path / "missing-reply.md"
+        cfg = Config.from_sources(
+            cli={
+                "comment_reply_prompt_path": str(missing),
+                "reply_comments": False,
+            },
+            env={"ADO_AUTH_TOKEN": "tok"},
+        )
+
+        cfg.validate_files()
+        with pytest.raises(ConfigError, match="missing-reply.md"):
+            cfg = Config.from_sources(
+                cli={
+                    "comment_reply_prompt_path": str(missing),
+                    "reply_comments": True,
+                },
+                env={"ADO_AUTH_TOKEN": "tok"},
+            )
+            cfg.validate_files(include_reply_prompt=True)
+
 
 class TestFromSourcesBranches:
     def test_invalid_anchor_policy_raises(self):

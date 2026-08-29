@@ -44,6 +44,7 @@ DEFAULT_VERIFY_PROMPT_PATH = _default_file(_PROMPTS_DIR / "verify-findings.md", 
 DEFAULT_SEVERITY_PROMPT_PATH = _default_file(_PROMPTS_DIR / "severity.md", "/app/prompts/severity.md")
 DEFAULT_AC_COVERAGE_PROMPT_PATH = _default_file(_PROMPTS_DIR / "ac-coverage.md", "/app/prompts/ac-coverage.md")
 DEFAULT_FAST_REVIEW_PROMPT_PATH = _default_file(_PROMPTS_DIR / "fast-review-system.md", "/app/prompts/fast-review-system.md")
+DEFAULT_COMMENT_REPLY_PROMPT_PATH = _default_file(_PROMPTS_DIR / "comment-reply.md", "/app/prompts/comment-reply.md")
 DEFAULT_CHUNK_SYNTHESIS_PROMPT_PATH = _default_file(_PROMPTS_DIR / "chunk-synthesis.md", "/app/prompts/chunk-synthesis.md")
 DEFAULT_STANDARDS_PATH = _default_file(_STANDARDS_DIR / "clean-code.md", "/app/standards/clean-code.md")
 
@@ -273,6 +274,12 @@ class Config:
     fast_review_prompt_path: Path = field(default=DEFAULT_FAST_REVIEW_PROMPT_PATH, compare=False)
     #: System prompt for the whole-PR synthesis call after chunked reviews.
     chunk_synthesis_prompt_path: Path = field(default=DEFAULT_CHUNK_SYNTHESIS_PROMPT_PATH, compare=False)
+    # --- Comment replies ---------------------------------------------------
+    #: When ``True`` (default), answer unanswered human replies on bot
+    #: threads after posting findings, and enable ``reviewforge reply``.
+    reply_comments: bool = field(default=True, compare=False)
+    #: System prompt for the comment-reply generation call.
+    comment_reply_prompt_path: Path = field(default=DEFAULT_COMMENT_REPLY_PROMPT_PATH, compare=False)
     #: Maximum commit subjects supplied as intent evidence to single_pi.
     commit_context_max: int = field(default=50, compare=False)
     #: Handling for findings whose inline anchor is absent from the current diff.
@@ -366,6 +373,12 @@ class Config:
         chunk_synthesis_prompt_path = _resolve_prompt_path(
             "CHUNK_SYNTHESIS_PROMPT_PATH", str(DEFAULT_CHUNK_SYNTHESIS_PROMPT_PATH)
         )
+        reply_comments = _coerce_bool(
+            None, default=True, env_value=os.getenv("REPLY_COMMENTS")
+        )
+        comment_reply_prompt_path = _resolve_prompt_path(
+            "COMMENT_REPLY_PROMPT_PATH", str(DEFAULT_COMMENT_REPLY_PROMPT_PATH)
+        )
         commit_context_max = require_uint(
             "COMMIT_CONTEXT_MAX", os.getenv("COMMIT_CONTEXT_MAX", "50")
         )
@@ -429,6 +442,8 @@ class Config:
             fast_review=fast_review,
             fast_review_prompt_path=fast_review_prompt_path,
             chunk_synthesis_prompt_path=chunk_synthesis_prompt_path,
+            reply_comments=reply_comments,
+            comment_reply_prompt_path=comment_reply_prompt_path,
             crg_enabled=is_true(os.getenv("CRG_ENABLED")),
             crg_cache_dir=Path(os.environ["CRG_CACHE_DIR"]) if os.getenv("CRG_CACHE_DIR") else None,
             crg_context_max_bytes=require_uint(
@@ -487,16 +502,17 @@ class Config:
 
     # -------------------------------------------------------- validation --
 
-    def validate_files(self) -> None:
-        """Ensure all required prompt/standards files exist.
+    def validate_files(self, *, include_reply_prompt: bool = False) -> None:
+        """Ensure prompt/standards files required by a pipeline exist.
 
-        The ``single_pi`` engine only needs the fast-review prompt and the
-        coding standards. The ``multi_stage`` engine needs the full set of
-        legacy stage prompts as well.
+        The reply prompt is validated only when the caller's pipeline can
+        execute replies and ``reply_comments`` is enabled.
         """
         paths = [self.standards_path]
         paths.append(self.fast_review_prompt_path)
         paths.append(self.chunk_synthesis_prompt_path)
+        if include_reply_prompt and self.reply_comments:
+            paths.append(self.comment_reply_prompt_path)
         legacy_paths = [
             self.review_prompt_path,
             self.intent_prompt_path,
@@ -539,7 +555,7 @@ class Config:
             for name, value, flag in required
             if not value
         ]
-        if command in {"review", "post", "fetch-context"} and not self.pr_id:
+        if command in {"review", "post", "reply", "fetch-context"} and not self.pr_id:
             problems.append(self._missing("PR_ID (or PR_URL)", command, "--pr"))
         return problems
 
@@ -839,6 +855,11 @@ def _build_from_sources(
         chunk_synthesis_prompt_path=to_path(
             cli_or_env("chunk_synthesis_prompt_path", "CHUNK_SYNTHESIS_PROMPT_PATH"),
             str(DEFAULT_CHUNK_SYNTHESIS_PROMPT_PATH),
+        ),
+        reply_comments=_coerce_bool(cli.get("reply_comments"), default=True, env_value=env.get("REPLY_COMMENTS")),
+        comment_reply_prompt_path=to_path(
+            cli_or_env("comment_reply_prompt_path", "COMMENT_REPLY_PROMPT_PATH"),
+            str(DEFAULT_COMMENT_REPLY_PROMPT_PATH),
         ),
         commit_context_max=commit_context_max,
         anchor_policy=anchor_policy,

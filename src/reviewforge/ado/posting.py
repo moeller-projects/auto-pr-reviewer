@@ -293,6 +293,62 @@ def classify_threads(threads: Iterable[dict[str, Any]]) -> BotMarkers:
             human += 1
     return BotMarkers(bot=bot, human=human)
 
+# ---------------------------------------------------------------------------
+# Awaiting-reply detection
+# ---------------------------------------------------------------------------
+#
+# A bot thread awaits a reply when a human had the last word. "Bot-authored"
+# is determined without an identity lookup: a comment is bot-authored when it
+# carries a marker itself or its author matches the author of the thread's
+# marker-carrying comment. That makes stale-reconciliation notes and previous
+# bot replies count as bot-authored, so the bot never replies to itself and
+# re-runs are idempotent without extra state.
+
+
+def _comment_author_key(comment: dict[str, Any]) -> str:
+    """Return a stable author key: ADO id, else uniqueName/displayName."""
+    author = comment.get("author")
+    if not isinstance(author, dict):
+        return str(author or comment.get("authorId") or "").strip().lower()
+    for key in ("id", "uniqueName", "displayName"):
+        value = str(author.get(key) or "").strip()
+        if value:
+            return value.lower()
+    return ""
+
+
+def _is_bot_comment(comment: dict[str, Any], bot_authors: set[str]) -> bool:
+    if _MARKER_RE.search(comment.get("content") or ""):
+        return True
+    key = _comment_author_key(comment)
+    return bool(key) and key in bot_authors
+
+
+def find_awaiting_replies(threads: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return bot threads whose last comment is a human reply.
+
+    Eligible threads carry a bot marker, are not ``closed``, and have at
+    least one comment whose author is not the bot. Threads without comments
+    or whose last comment is bot-authored are skipped.
+    """
+    awaiting: list[dict[str, Any]] = []
+    for thread in threads or []:
+        comments = thread.get("comments") or []
+        if not comments or not _thread_marker(thread):
+            continue
+        if str(thread.get("status") or "").lower() == "closed":
+            continue
+        bot_authors = {
+            key
+            for comment in comments
+            if _MARKER_RE.search(comment.get("content") or "")
+            for key in [_comment_author_key(comment)]
+            if key
+        }
+        if not _is_bot_comment(comments[-1], bot_authors):
+            awaiting.append(thread)
+    return awaiting
+
 
 def attach_marker(finding: dict[str, Any]) -> tuple[str, str]:
     """Return ``(key, marker_text)`` for a finding.
@@ -367,6 +423,7 @@ __all__ = [
     "classify_threads",
     "dedupe_key_v1",
     "existing_bot_markers",
+    "find_awaiting_replies",
     "finding_fingerprint",
     "find_stale_bot_threads",
     "is_work_item_finding",

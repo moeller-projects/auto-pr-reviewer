@@ -1448,6 +1448,7 @@ class TestDefaultPipeline:
             "execute_reasoning_engine",
             "validate_anchors",
             "post_to_ado",
+            "reply_to_comments",
         ]
 
     def test_review_only_pipeline_excludes_posting(self):

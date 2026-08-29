@@ -20,6 +20,7 @@ import json
 import shutil
 import sys
 from dataclasses import dataclass, field
+from dataclasses import replace as dataclass_replace
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +43,7 @@ from .stage import Stage, StageContext, run_stages
 from .stages import (
     DEFAULT_PIPELINE,
     POST_ONLY_PIPELINE,
+    REPLY_PIPELINE,
     REVIEW_ONLY_PIPELINE,
 )
 from .validation import validate_postable_review_doc
@@ -157,7 +159,7 @@ def run(cfg: Config) -> int:
 
 def run_full(cfg: Config) -> RunOutcome:
     """Run the full review pipeline (review + post)."""
-    cfg.validate_files()
+    cfg.validate_files(include_reply_prompt=cfg.reply_comments)
     artifacts = create_artifacts(cfg)
     configure_runlog(artifacts.run_log)
     log_info("run started")
@@ -257,6 +259,41 @@ def run_post_only(cfg: Config, *, input_path: Path) -> RunOutcome:
         _cleanup_repo_state(ctx)
 
 
+
+def run_reply_only(cfg: Config) -> RunOutcome:
+    """Answer pending human replies on bot threads without new findings.
+
+    Forces full-review mode so the repository checkout is prepared even when
+    review-mode detection would consider the PR unchanged.
+    """
+    cfg = dataclass_replace(cfg, force_full_review=True)
+    cfg.validate_files(include_reply_prompt=cfg.reply_comments)
+    artifacts = create_artifacts(cfg)
+    configure_runlog(artifacts.run_log)
+    log_info("reply-only run started")
+    pi = create_model_runner(cfg)
+    summary = new_run_summary(cfg, artifacts)
+    ctx = _make_stage_context(cfg, artifacts, pi)
+    ctx.extras["explicit_reply_command"] = True
+
+    try:
+        results = run_stages(REPLY_PIPELINE, ctx)
+        _record_results(summary, results)
+        exit_code = _exit_code_for(results)
+        finalize = finalize_run_summary(
+            summary,
+            cfg=cfg,
+            artifacts=artifacts,
+            posted={"reply_only": 1, "created": 0, "skipped": 0},
+            skipped_reason=ctx.skip_reason,
+            exit_code=exit_code,
+        )
+        write_json(artifacts.summary, finalize)
+        return RunOutcome(exit_code=exit_code, summary=summary, stages=results)
+    finally:
+        _cleanup_repo_state(ctx)
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -298,6 +335,7 @@ __all__ = [
     "run",
     "run_full",
     "run_post_only",
+    "run_reply_only",
     "run_review_only",
     "should_skip",
 ]
