@@ -52,6 +52,70 @@ def _thread_payload(thread: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _valid_replies(result: CommentReplies, pending: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep one non-empty reply for each currently pending thread."""
+    known_ids = {thread.get("id") for thread in pending}
+    replies: list[dict[str, Any]] = []
+    seen_ids: set[int] = set()
+    for item in result.replies:
+        body = item.reply.strip()
+        if item.thread_id not in known_ids or not body or item.thread_id in seen_ids:
+            continue
+        seen_ids.add(item.thread_id)
+        replies.append(
+            {"thread_id": item.thread_id, "reply": body, "posted": False}
+        )
+    dropped = len(result.replies) - len(replies)
+    if dropped:
+        _log(f"dropped {dropped} invalid reply/replies (unknown thread or empty body)")
+    return replies
+
+
+def _generate_replies(
+    ctx: StageContext, pending: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Generate and validate replies for the pending threads."""
+    payload = json.dumps(
+        [_thread_payload(thread) for thread in pending],
+        ensure_ascii=False,
+        indent=2,
+    )
+    raw_path = ctx.artifacts.raw_dir / "comment-replies.json"
+    ctx.pi.run_json(
+        ctx.cfg.comment_reply_prompt_path,
+        payload,
+        raw_path,
+        "comment reply",
+    )
+    return _valid_replies(load_and_validate(raw_path, CommentReplies), pending)
+
+
+def _post_replies(
+    cfg: Any, client: AdoClient, replies: list[dict[str, Any]]
+) -> tuple[int, int]:
+    """Post replies independently, returning ``(posted, failed)`` counts."""
+    posted = 0
+    failed = 0
+    for entry in replies:
+        try:
+            client.add_comment(cfg.pr_id, entry["thread_id"], entry["reply"])
+        except ReviewForgeError as exc:
+            failed += 1
+            entry["error"] = str(exc)
+            _log(f"reply to thread {entry['thread_id']} failed: {exc}")
+        else:
+            entry["posted"] = True
+            posted += 1
+    return posted, failed
+
+
+def _handle_dry_run(ctx: StageContext, replies: list[dict[str, Any]]) -> None:
+    """Record dry-run intent and print only for the explicit reply command."""
+    _log("DRY_RUN=1; printing replies (not posting)")
+    if ctx.extras.get("explicit_reply_command"):
+        print(json.dumps({"replies": replies}, ensure_ascii=False, indent=2))
+
+
 class ReplyToCommentsStage(Stage):
     """Generate and post replies to unanswered human comments on bot threads."""
 
@@ -69,46 +133,15 @@ class ReplyToCommentsStage(Stage):
             return {"awaiting": 0, "replied": 0}
 
         _log(f"{len(pending)} bot thread(s) awaiting a reply")
-        payload = json.dumps(
-            [_thread_payload(t) for t in pending], ensure_ascii=False, indent=2
-        )
-        raw_path = ctx.artifacts.raw_dir / "comment-replies.json"
-        ctx.pi.run_json(cfg.comment_reply_prompt_path, payload, raw_path, "comment reply")
-        result = load_and_validate(raw_path, CommentReplies)
-        known_ids = {t.get("id") for t in pending}
-        replies: list[dict[str, Any]] = []
-        seen_ids: set[int] = set()
-        for item in result.replies:
-            body = item.reply.strip()
-            if item.thread_id not in known_ids or not body or item.thread_id in seen_ids:
-                continue
-            seen_ids.add(item.thread_id)
-            replies.append({"thread_id": item.thread_id, "reply": body, "posted": False})
-        dropped = len(result.replies) - len(replies)
-        if dropped:
-            _log(f"dropped {dropped} invalid reply/replies (unknown thread or empty body)")
-
+        replies = _generate_replies(ctx, pending)
         posted = 0
         failed = 0
-        try:
-            if cfg.dry_run:
-                _log("DRY_RUN=1; printing replies (not posting)")
-                if ctx.extras.get("explicit_reply_command"):
-                    print(json.dumps({"replies": replies}, ensure_ascii=False, indent=2))
-            else:
-                for entry in replies:
-                    try:
-                        client.add_comment(cfg.pr_id, entry["thread_id"], entry["reply"])
-                    except ReviewForgeError as exc:
-                        failed += 1
-                        entry["error"] = str(exc)
-                        _log(f"reply to thread {entry['thread_id']} failed: {exc}")
-                    else:
-                        entry["posted"] = True
-                        posted += 1
-                _log(f"posted {posted} reply/replies on PR #{cfg.pr_id}")
-        finally:
-            write_json(ctx.artifacts.comment_replies, {"replies": replies})
+        if cfg.dry_run:
+            _handle_dry_run(ctx, replies)
+        else:
+            posted, failed = _post_replies(cfg, client, replies)
+            _log(f"posted {posted} reply/replies on PR #{cfg.pr_id}")
+        write_json(ctx.artifacts.comment_replies, {"replies": replies})
         if failed:
             _log(f"{failed} reply/replies failed after ADO retries")
         return {"awaiting": len(pending), "replied": posted}

@@ -1465,8 +1465,9 @@ class TestPlatformOperations:
         command = ops.build_command(
             ops.parser().parse_args(["build", "--runtime", "docker", "--dry-run"])
         )
-        assert "PI_VERSION=0.80.7" in command
-        assert "UV_VERSION=0.11.28" in command
+        pins = ops.load_pins()
+        assert f"PI_VERSION={pins['PI_VERSION']}" in command
+        assert f"UV_VERSION={pins['UV_VERSION']}" in command
 
     def test_run_explicit_values_override_environment(self, monkeypatch, tmp_path):
         from reviewforge import ops

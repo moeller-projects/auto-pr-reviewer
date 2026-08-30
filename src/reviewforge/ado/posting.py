@@ -324,30 +324,31 @@ def _is_bot_comment(comment: dict[str, Any], bot_authors: set[str]) -> bool:
     return bool(key) and key in bot_authors
 
 
-def find_awaiting_replies(threads: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Return bot threads whose last comment is a human reply.
+def _marker_authors(comments: Iterable[dict[str, Any]]) -> set[str]:
+    """Return author keys for comments carrying a bot marker."""
+    authors: set[str] = set()
+    for comment in comments:
+        if not _MARKER_RE.search(comment.get("content") or ""):
+            continue
+        key = _comment_author_key(comment)
+        if key:
+            authors.add(key)
+    return authors
 
-    Eligible threads carry a bot marker, are not ``closed``, and have at
-    least one comment whose author is not the bot. Threads without comments
-    or whose last comment is bot-authored are skipped.
-    """
-    awaiting: list[dict[str, Any]] = []
-    for thread in threads or []:
-        comments = thread.get("comments") or []
-        if not comments or not _thread_marker(thread):
-            continue
-        if str(thread.get("status") or "").lower() == "closed":
-            continue
-        bot_authors = {
-            key
-            for comment in comments
-            if _MARKER_RE.search(comment.get("content") or "")
-            for key in [_comment_author_key(comment)]
-            if key
-        }
-        if not _is_bot_comment(comments[-1], bot_authors):
-            awaiting.append(thread)
-    return awaiting
+
+def _thread_awaits_reply(thread: dict[str, Any]) -> bool:
+    """Return whether a single bot thread ends with a human comment."""
+    comments = thread.get("comments") or []
+    if not comments or not _thread_marker(thread):
+        return False
+    if str(thread.get("status") or "").lower() == "closed":
+        return False
+    return not _is_bot_comment(comments[-1], _marker_authors(comments))
+
+
+def find_awaiting_replies(threads: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return bot threads whose last comment is a human reply."""
+    return [thread for thread in threads or [] if _thread_awaits_reply(thread)]
 
 
 def attach_marker(finding: dict[str, Any]) -> tuple[str, str]:
