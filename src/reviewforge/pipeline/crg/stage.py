@@ -140,7 +140,12 @@ def _optional_analysis(
                 value = architecture(store, changed_files)
         except Exception as exc:
             log_warning(f"{message} ({type(exc).__name__}: {exc})")
-            value = {"status": "degraded", "error": str(exc)}
+            if key == "api_surface":
+                value = {"status": "degraded", "base_commit": getattr(ctx.state, "base_commit", ""), "added_nodes": [], "removed_nodes": [], "changed_nodes": [], "added_edges": [], "removed_edges": [], "truncated": False, "breaking_candidates": [], "error": str(exc)}
+            elif key == "flows":
+                value = {"status": "degraded", "affected_count": 0, "top": [], "error": str(exc)}
+            else:
+                value = {"status": "degraded", "hubs_touched": [], "bridges_touched": [], "communities_crossed": 0, "community_labels": {}, "error": str(exc)}
         graph_context[key] = value
         details[metric] = int((time.monotonic() - started) * 1000)
     return graph_context, details

@@ -431,7 +431,9 @@ class CoverageGap(_Base):
     @field_validator("file")
     @classmethod
     def _repo_relative(cls, v: str) -> str:
-        normalized = v.lstrip("/").replace("\\", "/")
+        normalized = v.replace("\\", "/")
+        if normalized.startswith("/") or re.match(r"^[A-Za-z]:/", normalized):
+            raise ValueError("file must be a repo-relative path")
         if not normalized or any(part == ".." for part in normalized.split("/")):
             raise ValueError("file must be a repo-relative path")
         return normalized

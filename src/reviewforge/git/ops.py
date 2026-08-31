@@ -109,34 +109,39 @@ def _initialize_repo(
 ) -> tuple[Path, list[Path], str, str]:
     cfg.clone_root.mkdir(parents=True, exist_ok=True)
     cleanup_paths: list[Path] = []
-    repo_dir = Path(tempfile.mkdtemp(prefix="repo.", dir=str(cfg.clone_root)))
-    cleanup_paths.append(repo_dir)
-    auth_dir = Path(tempfile.mkdtemp())
-    cleanup_paths.append(auth_dir)
-    askpass = auth_dir / "git-askpass.py"
-    askpass.write_text(GIT_ASKPASS_SCRIPT)
-    askpass.chmod(0o700)
-    os.environ["GIT_ASKPASS"] = str(askpass)
-    os.environ["GIT_TERMINAL_PROMPT"] = "0"
-    repo_url = _repo_url(cfg)
-    log(f"initializing reviewed repo in {repo_dir}")
-    run_logged("git init", ["git", "init"], repo_dir)
-    run_logged("git remote add origin", ["git", "remote", "add", "origin", repo_url], repo_dir)
-    subprocess.run(
-        ["git", "config", "--global", "--add", "safe.directory", str(repo_dir)],
-        cwd=str(repo_dir),
-    )
-    target_ref, source_ref = "refs/pr-review/target", "refs/pr-review/source"
-    for desc, branch, ref in (
-        ("git fetch target", target_branch, target_ref),
-        ("git fetch source", source_branch, source_ref),
-    ):
-        run_logged_retry(
-            desc,
-            ["git", "fetch", "--no-tags", "--depth=200", "origin", f"+refs/heads/{branch}:{ref}"],
-            repo_dir,
+    try:
+        repo_dir = Path(tempfile.mkdtemp(prefix="repo.", dir=str(cfg.clone_root)))
+        cleanup_paths.append(repo_dir)
+        auth_dir = Path(tempfile.mkdtemp())
+        cleanup_paths.append(auth_dir)
+        askpass = auth_dir / "git-askpass.py"
+        askpass.write_text(GIT_ASKPASS_SCRIPT)
+        askpass.chmod(0o700)
+        os.environ["GIT_ASKPASS"] = str(askpass)
+        os.environ["GIT_TERMINAL_PROMPT"] = "0"
+        repo_url = _repo_url(cfg)
+        log(f"initializing reviewed repo in {repo_dir}")
+        run_logged("git init", ["git", "init"], repo_dir)
+        run_logged("git remote add origin", ["git", "remote", "add", "origin", repo_url], repo_dir)
+        subprocess.run(
+            ["git", "config", "--global", "--add", "safe.directory", str(repo_dir)],
+            cwd=str(repo_dir),
         )
-    return repo_dir, cleanup_paths, target_ref, source_ref
+        target_ref, source_ref = "refs/pr-review/target", "refs/pr-review/source"
+        for desc, branch, ref in (
+            ("git fetch target", target_branch, target_ref),
+            ("git fetch source", source_branch, source_ref),
+        ):
+            run_logged_retry(
+                desc,
+                ["git", "fetch", "--no-tags", "--depth=200", "origin", f"+refs/heads/{branch}:{ref}"],
+                repo_dir,
+            )
+        return repo_dir, cleanup_paths, target_ref, source_ref
+    except Exception:
+        for path in cleanup_paths:
+            shutil.rmtree(path, ignore_errors=True)
+        raise
 
 
 def _merge_base_exists(repo_dir: Path, target_ref: str, source_ref: str) -> bool:

@@ -87,6 +87,7 @@ def _generate_replies(
         raw_path,
         "comment reply",
     )
+    ctx.last_token_usage = ctx.pi.last_tokens
     return _valid_replies(load_and_validate(raw_path, CommentReplies), pending)
 
 
@@ -111,7 +112,7 @@ def _post_replies(
 
 def _handle_dry_run(ctx: StageContext, replies: list[dict[str, Any]]) -> None:
     """Record dry-run intent and print only for the explicit reply command."""
-    _log("DRY_RUN=1; printing replies (not posting)")
+    _log("DRY_RUN=1; recording replies without posting")
     if ctx.extras.get("explicit_reply_command"):
         print(json.dumps({"replies": replies}, ensure_ascii=False, indent=2))
 
@@ -133,6 +134,7 @@ class ReplyToCommentsStage(Stage):
             return {"awaiting": 0, "replied": 0}
 
         _log(f"{len(pending)} bot thread(s) awaiting a reply")
+        ctx.pi.set_working_dir(ctx.state.repo_dir if ctx.state else None)
         replies = _generate_replies(ctx, pending)
         posted = 0
         failed = 0

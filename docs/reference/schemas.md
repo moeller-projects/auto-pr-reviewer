@@ -10,7 +10,7 @@ Fields: `metadata`, `review_summary`, `verification_summary`, `pr_summary`, `fin
 
 `RichFinding` contains `title`, `observation`, `impact`, `recommendation`, `severity`, optional `confidence`, `file`, `line`, `contextBasis`, `regression` (default `false`), and `evidence`. Evidence requires at least one reference, a changed line or classification, and rationale; `evidence.classification` is one of `work-item`, `architectural`, `repository-wide`, `prior-thread`, or `other`, and prior-thread evidence must cite `evidence.threads`.
 
-`TestGap` is `{behavior, suggested_test, file}`. `EscalationHint` is `{files, reason, suggested_focus, danger}`.
+`CoverageGap` is `{behavior, suggested_test, file}`. `EscalationHint` is `{files, reason, suggested_focus, danger}`.
 
 `ReviewState.previousFeedback` contains deterministic entries with a normalized finding fingerprint, thread status, latest human reply (truncated), disposition (`dismissed`, `fixed`, or `unresolved`), and thread ID. `regression` may be true only when changed lines reintroduce a prior issue.
 

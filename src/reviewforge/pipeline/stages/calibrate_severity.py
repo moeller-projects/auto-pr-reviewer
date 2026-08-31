@@ -60,6 +60,8 @@ def _merge_calibrations(ctx: StageContext, docs: dict[int, dict[str, Any]], find
     merged = []
     for idx in sorted(docs):
         doc = docs[idx]
+        if not isinstance(doc, dict):
+            doc = {}
         if doc.get("summary"):
             summaries.append(doc["summary"])
         merged.append(_validated_calibration(doc, findings[idx - 1]))
