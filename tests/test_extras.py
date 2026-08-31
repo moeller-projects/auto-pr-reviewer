@@ -73,6 +73,7 @@ class TestPiRunnerEdgeCases:
             standards_path=Path("/tmp/s.md"),
             review_language="English",
             pi_session_enabled=False, pi_session_clear=False, pi_session_id=None,
+            pi_retry_attempts=1, pi_retry_base_delay=0.0, pi_retry_cap_delay=0.0,
         )
 
     def test_timeout_raises_systemexit(self, tmp_path, monkeypatch):
@@ -163,6 +164,7 @@ class TestPiRunnerEdgeCases:
             standards_path=tmp_path / "st.md",
             review_language="German",
             pi_session_enabled=False, pi_session_clear=False, pi_session_id=None,
+            pi_retry_attempts=1, pi_retry_base_delay=0.0, pi_retry_cap_delay=0.0,
         )
         source = tmp_path / "r.md"
         source.write_text("base review", encoding="utf-8")
@@ -211,6 +213,7 @@ class TestPiRunnerEdgeCases:
             standards_path=Path("/tmp/s.md"),
             review_language="English",
             pi_session_enabled=True, pi_session_clear=False, pi_session_id="pr-42-review-r1",
+            pi_retry_attempts=1, pi_retry_base_delay=0.0, pi_retry_cap_delay=0.0,
         )
         runner = PiRunner(cfg)
         captured = []
@@ -239,6 +242,7 @@ class TestPiRunnerEdgeCases:
             standards_path=Path("/tmp/s.md"),
             review_language="English",
             pi_session_enabled=True, pi_session_clear=True, pi_session_id="x",
+            pi_retry_attempts=1, pi_retry_base_delay=0.0, pi_retry_cap_delay=0.0,
         )
         runner = PiRunner(cfg)
         captured = []
@@ -295,6 +299,7 @@ class TestPiRunnerEdgeCases:
             standards_path=Path("/tmp/s.md"),
             review_language="English",
             pi_session_enabled=False, pi_session_clear=False, pi_session_id=None,
+            pi_retry_attempts=1, pi_retry_base_delay=0.0, pi_retry_cap_delay=0.0,
         )
         runner = PiRunner(cfg)
         stderr = b"[pi] tokens: 1234 in / 567 out\n"
@@ -317,6 +322,7 @@ class TestPiRunnerEdgeCases:
             standards_path=Path("/tmp/s.md"),
             review_language="English",
             pi_session_enabled=True, pi_session_clear=False, pi_session_id="pr-1",
+            pi_retry_attempts=1, pi_retry_base_delay=0.0, pi_retry_cap_delay=0.0,
         )
         runner = PiRunner(cfg)
         calls = []

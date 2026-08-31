@@ -1016,6 +1016,7 @@ class TestTokenUsageObservability:
             severity_prompt_path=Path("/tmp/s.md"),
             standards_path=Path("/tmp/s.md"),
             pi_session_enabled=False, pi_session_clear=False, pi_session_id=None,
+            pi_retry_attempts=1, pi_retry_base_delay=0.0, pi_retry_cap_delay=0.0,
         )
         stderr = b"info: tokens 1500 in / 800 out\n"
         monkeypatch.setattr(
@@ -1037,8 +1038,8 @@ class TestTokenUsageObservability:
             context_digest_prompt_path=Path("/tmp/d.md"),
             verify_prompt_path=Path("/tmp/v.md"),
             severity_prompt_path=Path("/tmp/s.md"),
-            standards_path=Path("/tmp/s.md"),
             pi_session_enabled=False, pi_session_clear=False, pi_session_id=None,
+            pi_retry_attempts=1, pi_retry_base_delay=0.0, pi_retry_cap_delay=0.0,
         )
         monkeypatch.setattr(
             "reviewforge.ai.runner.subprocess.run",
@@ -1063,6 +1064,7 @@ class TestTokenUsageObservability:
             severity_prompt_path=Path("/tmp/s.md"),
             standards_path=Path("/tmp/s.md"),
             pi_session_enabled=False, pi_session_clear=False, pi_session_id=None,
+            pi_retry_attempts=1, pi_retry_base_delay=0.0, pi_retry_cap_delay=0.0,
         )
         monkeypatch.setattr(
             "reviewforge.ai.runner.subprocess.run",
@@ -1081,8 +1083,8 @@ class TestTokenUsageObservability:
             context_digest_prompt_path=Path("/tmp/d.md"),
             verify_prompt_path=Path("/tmp/v.md"),
             severity_prompt_path=Path("/tmp/s.md"),
-            standards_path=Path("/tmp/s.md"),
             pi_session_enabled=False, pi_session_clear=False, pi_session_id=None,
+            pi_retry_attempts=1, pi_retry_base_delay=0.0, pi_retry_cap_delay=0.0,
         )
         calls = []
         def fake_run(*a, **k):
@@ -1235,3 +1237,96 @@ class TestTokenUsageObservability:
         )
         payload = json.loads(summary_path.read_text())
         assert payload["stages"][0]["details"]["token_usage_source"] == "stderr-regex"
+
+
+# =====================================================================
+# Phase G — Primary-call retry on transient non-zero exit
+# =====================================================================
+
+
+class TestPrimaryRetry:
+    """A non-zero Pi exit is retried with backoff before failing."""
+
+    def test_nonzero_exit_then_success(self, cfg, tmp_path, monkeypatch):
+        calls = []
+
+        def fake_run(cmd, input=b"", **k):
+            calls.append(list(cmd))
+            if len(calls) == 1:
+                return subprocess.CompletedProcess(cmd, 1, b"", b"terminated")
+            return subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"")
+
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ai.runner.time.sleep", lambda s: None)
+        cfg = replace(cfg, pi_retry_attempts=2, pi_retry_base_delay=0.0, pi_retry_cap_delay=0.0)
+        runner = PiRunner(cfg)
+        runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
+        assert len(calls) == 2
+        assert runner.invocation_count == 2
+        assert runner.repair_invocation_count == 0
+
+    def test_all_attempts_fail_raises(self, cfg, tmp_path, monkeypatch):
+        calls = []
+
+        def fake_run(cmd, input=b"", **k):
+            calls.append(list(cmd))
+            return subprocess.CompletedProcess(cmd, 1, b"", b"terminated")
+
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ai.runner.time.sleep", lambda s: None)
+        cfg = replace(cfg, pi_retry_attempts=3, pi_retry_base_delay=0.0, pi_retry_cap_delay=0.0)
+        runner = PiRunner(cfg)
+        with pytest.raises(PiExecutionError, match="exited 1"):
+            runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
+        assert len(calls) == 3
+        assert runner.invocation_count == 3
+
+    def test_attempts_one_disables_retry(self, cfg, tmp_path, monkeypatch):
+        calls = []
+
+        def fake_run(cmd, input=b"", **k):
+            calls.append(list(cmd))
+            return subprocess.CompletedProcess(cmd, 1, b"", b"terminated")
+
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
+        cfg = replace(cfg, pi_retry_attempts=1)
+        runner = PiRunner(cfg)
+        with pytest.raises(PiExecutionError, match="exited 1"):
+            runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
+        assert len(calls) == 1
+
+    def test_timeout_is_not_retried(self, cfg, tmp_path, monkeypatch):
+        calls = []
+
+        def fake_run(cmd, input=b"", **k):
+            calls.append(list(cmd))
+            raise subprocess.TimeoutExpired(cmd, 1)
+
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
+        cfg = replace(cfg, pi_retry_attempts=3)
+        runner = PiRunner(cfg)
+        with pytest.raises(PiExecutionError, match="timed out"):
+            runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
+        assert len(calls) == 1
+
+    def test_final_failure_surfaces_stderr_tail(self, cfg, tmp_path, monkeypatch):
+        stderr = (
+            b"Warning: No project session found with id 'pr-42-review'; "
+            b"creating a new session with that id.\nterminated\n"
+        )
+        monkeypatch.setattr(
+            "reviewforge.ai.runner.subprocess.run",
+            lambda *a, **k: subprocess.CompletedProcess(a, 1, b"", stderr),
+        )
+        monkeypatch.setattr("reviewforge.ai.runner.time.sleep", lambda s: None)
+        cfg = replace(cfg, pi_retry_attempts=1)
+        runner = PiRunner(cfg)
+        with pytest.raises(PiExecutionError) as exc:
+            runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
+        assert "terminated" in str(exc.value)
+        assert "No project session found" in str(exc.value)
+        assert exc.value.details["stderr_tail"] == (
+            "Warning: No project session found with id 'pr-42-review'; "
+            "creating a new session with that id. | terminated"
+        )
+

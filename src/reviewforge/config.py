@@ -303,6 +303,15 @@ class Config:
     #: Session id used by Pi. Defaults to ``pr-{pr_id}-review`` (with
     #: ``-{run_id}`` appended when a run id is set) so re-runs resume.
     pi_session_id: str | None = field(default=None, compare=False)
+    # --- Pi subprocess retry ----------------------------------------------
+    #: Total Pi attempts per primary reasoning call (>=1). A non-zero exit
+    #: (e.g. a transient "terminated" session failure) is retried with
+    #: exponential backoff. ``1`` disables retry.
+    pi_retry_attempts: int = field(default=2, compare=False)
+    #: Seconds before the first retry; doubles per attempt up to the cap.
+    pi_retry_base_delay: float = field(default=5.0, compare=False)
+    #: Maximum seconds to wait before a retry.
+    pi_retry_cap_delay: float = field(default=60.0, compare=False)
     # --- CRG context enrichment -------------------------------------------
     #: When ``True``, run the CRG Tree-sitter enrichment stage between
     #: PrepareRepository and ExecuteReasoningEngine. Requires the optional
@@ -418,6 +427,9 @@ class Config:
             chunk_trigger_diff_bytes=require_uint("CHUNK_TRIGGER_DIFF_BYTES", chunk_trigger_raw),
             disable_chunk_review=is_true(os.getenv("DISABLE_CHUNK_REVIEW")),
             pi_timeout_secs=require_uint("PI_TIMEOUT_SECS", os.getenv("PI_TIMEOUT_SECS", "600")),
+            pi_retry_attempts=require_uint("PI_RETRY_ATTEMPTS", os.getenv("PI_RETRY_ATTEMPTS", "2")),
+            pi_retry_base_delay=float(os.getenv("PI_RETRY_BASE_DELAY", "5")),
+            pi_retry_cap_delay=float(os.getenv("PI_RETRY_CAP_DELAY", "60")),
             dry_run=is_true(os.getenv("DRY_RUN")),
             include_work_items=is_true(os.getenv("INCLUDE_WORK_ITEMS", "1")),
             include_existing_comments=is_true(os.getenv("INCLUDE_EXISTING_COMMENTS", "1")),
@@ -678,6 +690,9 @@ def _source_numbers(
         "max_diff_bytes": max_diff,
         "chunk_trigger_diff_bytes": require_uint("CHUNK_TRIGGER_DIFF_BYTES", chunk),
         "pi_timeout_secs": require_uint("PI_TIMEOUT_SECS", _source_value(cli, env, "pi_timeout_secs", "PI_TIMEOUT_SECS", "600")),
+        "pi_retry_attempts": require_uint("PI_RETRY_ATTEMPTS", _source_value(cli, env, "pi_retry_attempts", "PI_RETRY_ATTEMPTS", "2")),
+        "pi_retry_base_delay": float(_source_value(cli, env, "pi_retry_base_delay", "PI_RETRY_BASE_DELAY", "5")),
+        "pi_retry_cap_delay": float(_source_value(cli, env, "pi_retry_cap_delay", "PI_RETRY_CAP_DELAY", "60")),
         "context_file_max_lines": require_uint("CONTEXT_FILE_MAX_LINES", _source_value(cli, env, "context_file_max_lines", "CONTEXT_FILE_MAX_LINES", "260")),
         "context_search_max_matches": require_uint("CONTEXT_SEARCH_MAX_MATCHES", _source_value(cli, env, "context_search_max_matches", "CONTEXT_SEARCH_MAX_MATCHES", "40")),
         "collect_context_workers": require_uint("COLLECT_CONTEXT_WORKERS", _source_value(cli, env, "collect_context_workers", "COLLECT_CONTEXT_WORKERS", "8")),
@@ -778,6 +793,9 @@ def _build_from_sources(
     ado_retry_cap_delay = numbers["ado_retry_cap_delay"]
     ado_retry_budget_secs = numbers["ado_retry_budget_secs"]
     commit_context_max = numbers["commit_context_max"]
+    pi_retry_attempts = numbers["pi_retry_attempts"]
+    pi_retry_base_delay = numbers["pi_retry_base_delay"]
+    pi_retry_cap_delay = numbers["pi_retry_cap_delay"]
     runtime = _source_runtime(cli, env)
     model_backend = runtime["model_backend"]
     reasoning_engine = runtime["reasoning_engine"]
@@ -849,6 +867,9 @@ def _build_from_sources(
         ado_retry_base_delay=ado_retry_base_delay,
         ado_retry_cap_delay=ado_retry_cap_delay,
         ado_retry_budget_secs=ado_retry_budget_secs,
+        pi_retry_attempts=pi_retry_attempts,
+        pi_retry_base_delay=pi_retry_base_delay,
+        pi_retry_cap_delay=pi_retry_cap_delay,
         model_backend=model_backend,
         context_file_max_lines=context_file_max_lines,
         context_search_max_matches=context_search_max_matches,

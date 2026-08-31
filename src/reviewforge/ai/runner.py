@@ -38,6 +38,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 
 from ..config import Config, _ENV_ALIASES
 from ..exceptions import PiExecutionError
@@ -89,6 +90,18 @@ def _parse_context_file_reads(stderr_text: str) -> dict[str, int] | str:
             name = f".reviewforge-context/{match.group('file').rstrip('.,;:)]')}"
             counts[name] = counts.get(name, 0) + 1
     return counts if saw_read_diagnostic else "unknown"
+
+
+def _stderr_tail(stderr_bytes: bytes, *, max_lines: int = 3) -> str:
+    """Return the last non-empty stderr lines, for surfacing in errors."""
+    if not stderr_bytes:
+        return ""
+    lines = [
+        line.strip()
+        for line in stderr_bytes.decode(errors="replace").splitlines()
+        if line.strip()
+    ]
+    return " | ".join(lines[-max_lines:])
 
 
 def _default_session_id(cfg: Config) -> str:
@@ -286,6 +299,7 @@ class PiCliRunner:
         *,
         repair: bool = False,
     ) -> subprocess.CompletedProcess[bytes]:
+        self._invocation_count += 1
         try:
             cp = subprocess.run(
                 cmd,
@@ -312,6 +326,40 @@ class PiCliRunner:
         return cp
 
 
+    def _run_primary_with_retry(
+        self,
+        cmd: list[str],
+        input_data: bytes,
+        stage: str,
+        env: dict[str, str],
+    ) -> subprocess.CompletedProcess[bytes]:
+        """Run the primary Pi call, retrying transient non-zero exits.
+
+        A non-zero exit (e.g. Pi "terminated" after failing to find or create
+        its session) is retried up to ``cfg.pi_retry_attempts`` times with
+        exponential backoff. Timeouts and empty output are not retried here:
+        the former is surfaced by :meth:`_run_process` and the latter by
+        :meth:`run_json`.
+        """
+        attempts = max(1, self.cfg.pi_retry_attempts)
+        last: subprocess.CompletedProcess[bytes] | None = None
+        for attempt in range(1, attempts + 1):
+            cp = self._run_process(cmd, input_data, stage, env)
+            if cp.returncode == 0:
+                return cp
+            last = cp
+            if attempt < attempts:
+                delay = min(
+                    self.cfg.pi_retry_cap_delay,
+                    self.cfg.pi_retry_base_delay * (2 ** (attempt - 1)),
+                )
+                _warn(
+                    f"Pi {stage} exited {cp.returncode} "
+                    f"(attempt {attempt}/{attempts}); retrying in {delay:.1f}s"
+                )
+                time.sleep(delay)
+        return last  # type: ignore[return-value]
+
     def run_json(
         self,
         prompt_path: Path,
@@ -328,17 +376,20 @@ class PiCliRunner:
             f"session: {sid}, clear: {self.cfg.pi_session_clear})"
         )
         env = self._build_subprocess_env()
-        self._invocation_count += 1
-        cp = self._run_process(
+        cp = self._run_primary_with_retry(
             self._build_cmd(resolved_prompt, instruction),
             stdin_text.encode(),
             stage,
             env,
         )
         if cp.returncode:
+            tail = _stderr_tail(cp.stderr)
+            message = f"[review][ERROR] pi {stage} exited {cp.returncode}"
+            if tail:
+                message += f" (stderr: {tail})"
             raise PiExecutionError(
-                f"[review][ERROR] pi {stage} exited {cp.returncode}",
-                details={"stage": stage, "returncode": cp.returncode},
+                message,
+                details={"stage": stage, "returncode": cp.returncode, "stderr_tail": tail},
             )
         output_path.write_bytes(cp.stdout)
         if not output_path.stat().st_size:
@@ -357,7 +408,6 @@ class PiCliRunner:
         _log(
             f"running Pi {stage} repair ({'in session' if self.cfg.pi_session_enabled else 'legacy mode'})"
         )
-        self._invocation_count += 1
         self._repair_invocation_count += 1
         cp = self._run_process(
             self._build_cmd(

@@ -37,6 +37,9 @@ def test_persists_pi_stderr_in_run_log(tmp_path, monkeypatch):
         review_run_id=None,
         pr_id="1",
         pi_session_id=None,
+        pi_retry_attempts=1,
+        pi_retry_base_delay=0.0,
+        pi_retry_cap_delay=0.0,
     )
     monkeypatch.setattr(
         "reviewforge.ai.runner.subprocess.run",
