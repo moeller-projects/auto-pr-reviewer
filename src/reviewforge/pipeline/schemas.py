@@ -329,20 +329,36 @@ class RichFinding(_Base):
 
     @model_validator(mode="after")
     def _constraints(self) -> "RichFinding":
-        if self.regression and not self.evidence.changedLines:
-            raise ValueError("regression findings must cite changed lines")
-        is_work_item = bool(
-            _WORK_ITEM_TITLE_RE.match(self.title or "")
-            or self.evidence.classification == "work-item"
-        )
-        if is_work_item:
-            if self.file is not None or self.line is not None:
-                raise ValueError("work-item findings must not anchor to a file or line")
-            if self.severity not in ("major", "blocker"):
-                raise ValueError("work-item findings require severity major or blocker")
-        if self.evidence.classification == "prior-thread" and not self.evidence.threads:
-            raise ValueError("prior-thread findings must cite the thread id")
+        _validate_regression_constraint(self)
+        _validate_work_item_constraint(self)
+        _validate_prior_thread_constraint(self)
         return self
+
+def _validate_regression_constraint(finding: Any) -> None:
+    if finding.regression and not finding.evidence.changedLines:
+        raise ValueError("regression findings must cite changed lines")
+
+
+def _is_work_item_finding(finding: Any) -> bool:
+    return bool(
+        _WORK_ITEM_TITLE_RE.match(finding.title or "")
+        or finding.evidence.classification == "work-item"
+    )
+
+
+def _validate_work_item_constraint(finding: Any) -> None:
+    if not _is_work_item_finding(finding):
+        return
+    if finding.file is not None or finding.line is not None:
+        raise ValueError("work-item findings must not anchor to a file or line")
+    if finding.severity not in ("major", "blocker"):
+        raise ValueError("work-item findings require severity major or blocker")
+
+
+def _validate_prior_thread_constraint(finding: Any) -> None:
+    if finding.evidence.classification == "prior-thread" and not finding.evidence.threads:
+        raise ValueError("prior-thread findings must cite the thread id")
+
 
 
 class DiscardedFinding(_Base):

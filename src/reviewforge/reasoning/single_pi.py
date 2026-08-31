@@ -10,8 +10,7 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any
-
+from typing import Any, Callable
 from ..artifacts.builder import read_json
 from ..exceptions import ReasoningEngineError, SchemaValidationError
 from ..git import ops as git_ops
@@ -252,6 +251,45 @@ def _build_chunk_instruction(
     return f"{prefix}\n\n{body}" if prefix else body
 
 
+def _format_finding_line(finding: dict[str, Any]) -> str:
+    location = finding.get("file") or "general"
+    if finding.get("line"):
+        location = f"{location}:{finding['line']}"
+    return f"- [{finding.get('severity', 'minor')}] {finding.get('title', '')} ({location})"
+
+
+def _synthesis_section(
+    title: str,
+    items: list[dict[str, Any]],
+    formatter: Callable[[dict[str, Any]], str],
+) -> list[str]:
+    if not items:
+        return [title, "- none"]
+    return [title, *(formatter(item) for item in items)]
+
+
+def _finding_synthesis_lines(findings: list[dict[str, Any]]) -> list[str]:
+    lines = [_format_finding_line(finding) for finding in findings]
+    lines.append("- none" if not findings else "")
+    return lines
+
+
+def _format_gap(gap: dict[str, Any]) -> str:
+    return f"- {gap.get('file', '')}: {gap.get('behavior', '')}"
+
+
+def _format_hint(hint: dict[str, Any]) -> str:
+    return f"- [{hint.get('danger', 'high')}] {hint.get('suggested_focus', '')}: {hint.get('reason', '')}"
+
+
+def _format_discarded(item: dict[str, Any]) -> str:
+    return f"- {item.get('category', '')}: {item.get('reason', '')}"
+
+
+def _format_uncertainty(item: dict[str, Any]) -> str:
+    return f"- {item.get('topic', '')}"
+
+
 def _synthesis_lines(
     findings: list[dict[str, Any]],
     uncertainties: list[dict[str, Any]],
@@ -259,33 +297,23 @@ def _synthesis_lines(
     escalation_hints: list[dict[str, Any]],
     discarded_findings: list[dict[str, Any]],
 ) -> list[str]:
-    lines = []
-    for finding in findings:
-        location = finding.get("file") or "general"
-        if finding.get("line"):
-            location = f"{location}:{finding['line']}"
-        lines.append(f"- [{finding.get('severity', 'minor')}] {finding.get('title', '')} ({location})")
-    lines.append("- none" if not findings else "")
-    lines.append("Merged test gaps across all chunks:")
-    lines.extend(f"- {gap.get('file', '')}: {gap.get('behavior', '')}" for gap in test_gaps)
-    if not test_gaps:
-        lines.append("- none")
-    lines.append("Merged escalation hints across all chunks:")
+    lines = _finding_synthesis_lines(findings)
+    lines.extend(_synthesis_section("Merged test gaps across all chunks:", test_gaps, _format_gap))
     lines.extend(
-        f"- [{hint.get('danger', 'high')}] {hint.get('suggested_focus', '')}: {hint.get('reason', '')}"
-        for hint in escalation_hints
+        _synthesis_section(
+            "Merged escalation hints across all chunks:", escalation_hints, _format_hint
+        )
     )
-    if not escalation_hints:
-        lines.append("- none")
-    lines.append("Merged discarded findings across all chunks:")
-    lines.extend(f"- {item.get('category', '')}: {item.get('reason', '')}" for item in discarded_findings)
-    if not discarded_findings:
-        lines.append("- none")
-    lines.append("Merged uncertainties across all chunks:")
-    lines.extend(f"- {item.get('topic', '')}" for item in uncertainties)
-    if not uncertainties:
-        lines.append("- none")
+    lines.extend(
+        _synthesis_section(
+            "Merged discarded findings across all chunks:", discarded_findings, _format_discarded
+        )
+    )
+    lines.extend(
+        _synthesis_section("Merged uncertainties across all chunks:", uncertainties, _format_uncertainty)
+    )
     return lines
+
 
 
 def _build_synthesis_instruction(
@@ -356,28 +384,46 @@ def _new_merge_state() -> dict[str, Any]:
     }
 
 
+def _merge_unique(
+    state: dict[str, Any],
+    items: list[Any],
+    seen_key: str,
+    output_key: str,
+    key_func: Callable[[Any], Any],
+) -> None:
+    for item in items:
+        key = key_func(item)
+        if key in state[seen_key]:
+            continue
+        state[seen_key].add(key)
+        state[output_key].append(item.model_dump(by_alias=True))
+
+
+def _finding_key(finding: Any) -> tuple[Any, ...]:
+    return (finding.file, finding.line, _normalize_title(finding.title))
+
+
+def _gap_key(gap: Any) -> tuple[str, str]:
+    return (gap.file, gap.behavior.casefold().strip())
+
+
+def _hint_key(hint: Any) -> tuple[tuple[str, ...], str]:
+    return (tuple(sorted(hint.files)), hint.reason.casefold().strip())
+
+
+def _uncertainty_key(item: Any) -> tuple[str, str]:
+    return (item.topic.casefold().strip(), item.reason.casefold().strip())
+
+
 def _merge_chunk(partial: ChunkResult, state: dict[str, Any]) -> None:
-    for finding in partial.findings:
-        key = (finding.file, finding.line, _normalize_title(finding.title))
-        if key not in state["seen_findings"]:
-            state["seen_findings"].add(key)
-            state["findings"].append(finding.model_dump(by_alias=True))
-    for gap in partial.test_gaps:
-        key = (gap.file, gap.behavior.casefold().strip())
-        if key not in state["seen_gaps"]:
-            state["seen_gaps"].add(key)
-            state["test_gaps"].append(gap.model_dump(by_alias=True))
-    for hint in partial.escalation_hints:
-        key = (tuple(sorted(hint.files)), hint.reason.casefold().strip())
-        if key not in state["seen_hints"]:
-            state["seen_hints"].add(key)
-            state["escalation_hints"].append(hint.model_dump(by_alias=True))
-    for item in partial.uncertainties:
-        key = (item.topic.casefold().strip(), item.reason.casefold().strip())
-        if key not in state["seen_uncertainties"]:
-            state["seen_uncertainties"].add(key)
-            state["uncertainties"].append(item.model_dump(by_alias=True))
-    state["discarded_findings"].extend(item.model_dump(by_alias=True) for item in partial.discarded_findings)
+    _merge_unique(state, partial.findings, "seen_findings", "findings", _finding_key)
+    _merge_unique(state, partial.test_gaps, "seen_gaps", "test_gaps", _gap_key)
+    _merge_unique(state, partial.escalation_hints, "seen_hints", "escalation_hints", _hint_key)
+    _merge_unique(state, partial.uncertainties, "seen_uncertainties", "uncertainties", _uncertainty_key)
+    state["discarded_findings"].extend(
+        item.model_dump(by_alias=True) for item in partial.discarded_findings
+    )
+
 
 
 def _cap_and_order_hints(hints: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -544,6 +590,39 @@ def _escalation_instruction(hints: list[EscalationHint], diff_text: str) -> str:
     return "\n".join(lines) + "\nReturn only the ReviewResult JSON object defined in the system prompt.\n"
 
 
+def _escalation_runner(ctx: StageContext, cfg: Any) -> Any:
+    model = getattr(cfg, "escalation_model", None)
+    if not model or model == cfg.pi_model:
+        return ctx.pi
+    from ..ai.model_runner import create_model_runner
+
+    session_id = getattr(ctx.pi, "session_id", None)
+    overrides: dict[str, Any] = {"pi_model": model}
+    if session_id:
+        overrides["pi_session_id"] = f"{session_id}-escalation"
+    runner = create_model_runner(cfg.with_overrides(**overrides))
+    set_working_dir = getattr(runner, "set_working_dir", None)
+    if callable(set_working_dir):
+        set_working_dir(getattr(ctx.state, "repo_dir", None))
+    return runner
+
+
+def _execute_escalation(
+    runner: Any,
+    cfg: Any,
+    instruction: str,
+    output_path: Any,
+) -> ReviewResult | None:
+    try:
+        runner.run_json(cfg.fast_review_prompt_path, instruction, output_path, "escalation review")
+        return ReviewResult.model_validate(read_json(output_path))
+    except Exception as exc:  # noqa: BLE001 - escalation must never fail a review
+        log_warning(
+            f"escalation review unavailable ({type(exc).__name__}: {exc}); retaining primary review"
+        )
+        return None
+
+
 def _run_escalation_pass(
     engine: Any, ctx: StageContext, result: ReviewResult
 ) -> ReviewResult | None:
@@ -554,31 +633,14 @@ def _run_escalation_pass(
     diff_text = getattr(ctx.state, "diff_text", "") or ""
     instruction = _escalation_instruction(list(result.escalation_hints), diff_text)
     output_path = ctx.artifacts.raw_dir / "escalation-review.json"
-    model = getattr(cfg, "escalation_model", None)
-    runner = ctx.pi
-    if model and model != cfg.pi_model:
-        from ..ai.model_runner import create_model_runner
-
-        session_id = getattr(ctx.pi, "session_id", None)
-        overrides: dict[str, Any] = {"pi_model": model}
-        if session_id:
-            overrides["pi_session_id"] = f"{session_id}-escalation"
-        new_cfg = cfg.with_overrides(**overrides)
-        runner = create_model_runner(new_cfg)
-        set_working_dir = getattr(runner, "set_working_dir", None)
-        if callable(set_working_dir):
-            set_working_dir(getattr(ctx.state, "repo_dir", None))
-    try:
-        runner.run_json(cfg.fast_review_prompt_path, instruction, output_path, "escalation review")
-        focused = ReviewResult.model_validate(read_json(output_path))
-    except Exception as exc:  # noqa: BLE001 - escalation must never fail a review
-        log_warning(
-            f"escalation review unavailable ({type(exc).__name__}: {exc}); retaining primary review"
-        )
+    runner = _escalation_runner(ctx, cfg)
+    focused = _execute_escalation(runner, cfg, instruction, output_path)
+    if focused is None:
         return None
     if runner is not ctx.pi:
         ctx.extras["_escalation_usage"] = _runner_usage(runner)
     return focused
+
 
 
 def _merge_escalation(base: ReviewResult, focused: ReviewResult) -> ReviewResult:

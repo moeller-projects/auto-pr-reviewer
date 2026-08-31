@@ -98,6 +98,33 @@ def _default_session_id(cfg: Config) -> str:
     return f"pr-{cfg.pr_id}-review"
 
 
+def _prompt_candidate_matches(candidate: Path | str | None, resolved: Path) -> bool:
+    if candidate is None:
+        return False
+    try:
+        return Path(candidate).resolve() == resolved
+    except OSError:
+        return Path(candidate) == resolved
+
+
+def _review_prompt_candidates(cfg: Config) -> tuple[Path | str | None, ...]:
+    return (
+        getattr(cfg, "fast_review_prompt_path", None),
+        getattr(cfg, "review_prompt_path", None),
+    )
+
+
+def _is_review_prompt(prompt_path: Path, cfg: Config) -> bool:
+    """Return True when ``prompt_path`` is one of the review prompts."""
+    try:
+        resolved = prompt_path.resolve()
+    except OSError:
+        resolved = prompt_path
+    return any(
+        _prompt_candidate_matches(candidate, resolved)
+        for candidate in _review_prompt_candidates(cfg)
+    )
+
 class PiCliRunner:
     """Run the ``pi`` CLI as a JSON producer, with optional session reuse."""
 
@@ -207,24 +234,7 @@ class PiCliRunner:
         return augmented
 
     def _is_review_prompt(self, prompt_path: Path) -> bool:
-        """Return True when ``prompt_path`` is one of the review prompts."""
-        try:
-            resolved = prompt_path.resolve()
-        except OSError:
-            resolved = prompt_path
-        for candidate in (
-            getattr(self.cfg, "fast_review_prompt_path", None),
-            getattr(self.cfg, "review_prompt_path", None),
-        ):
-            if candidate is None:
-                continue
-            try:
-                if Path(candidate).resolve() == resolved:
-                    return True
-            except OSError:
-                if Path(candidate) == resolved:
-                    return True
-        return False
+        return _is_review_prompt(prompt_path, self.cfg)
 
     def _build_cmd(self, prompt_path: Path, instruction: str) -> list[str]:
         """Compose the Pi CLI command, including session flags when enabled."""
