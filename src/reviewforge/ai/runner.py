@@ -42,7 +42,7 @@ import time
 
 from ..config import Config, _ENV_ALIASES
 from ..exceptions import PiExecutionError
-from ..runlog import info as _log, warning as _warn
+from ..runlog import info as _log, warning as _warn, SECRET_NAMES
 from .prompts import augment_prompt_file
 
 
@@ -92,6 +92,15 @@ def _parse_context_file_reads(stderr_text: str) -> dict[str, int] | str:
     return counts if saw_read_diagnostic else "unknown"
 
 
+def _redact(text: str) -> str:
+    """Replace known secret values with ``***`` (defense in depth)."""
+    for name in SECRET_NAMES:
+        value = os.environ.get(name)
+        if value:
+            text = text.replace(value, "***")
+    return text
+
+
 def _stderr_tail(stderr_bytes: bytes, *, max_lines: int = 3) -> str:
     """Return the last non-empty stderr lines, for surfacing in errors."""
     if not stderr_bytes:
@@ -101,7 +110,7 @@ def _stderr_tail(stderr_bytes: bytes, *, max_lines: int = 3) -> str:
         for line in stderr_bytes.decode(errors="replace").splitlines()
         if line.strip()
     ]
-    return " | ".join(lines[-max_lines:])
+    return _redact(" | ".join(lines[-max_lines:]))
 
 
 def _default_session_id(cfg: Config) -> str:
@@ -150,6 +159,9 @@ class PiCliRunner:
         self._repair_invocation_count = 0
         self._working_dir: Path | None = None
         self._context_file_reads: dict[str, int] | str = {}
+        #: Ordered per-invocation outcome records, one per ``_run_process``
+        #: subprocess call (primary attempts and repair calls alike).
+        self._invocations: list[dict[str, object]] = []
         # Per-runner cache of source prompt path → augmented prompt path.
         # The augmented copy has the LANGUAGE directive appended so every
         # stage (review, verify, severity, intent, plan, digest) instructs
@@ -182,6 +194,10 @@ class PiCliRunner:
     def repair_invocation_count(self) -> int:
         return self._repair_invocation_count
 
+    @property
+    def invocations(self) -> list[dict[str, object]]:
+        """Ordered per-invocation outcome records."""
+        return list(self._invocations)
 
     @property
     def context_file_reads(self) -> dict[str, int] | str:
@@ -290,6 +306,38 @@ class PiCliRunner:
                 break
         return result
 
+    def _record_invocation(
+        self,
+        *,
+        stage: str,
+        repair: bool,
+        attempt: int | None,
+        returncode: int | None,
+        timed_out: bool,
+        stdout_bytes: int,
+        stdout_text: str,
+        stderr_bytes: bytes,
+        tokens: dict[str, int],
+        duration_ms: int,
+    ) -> None:
+        """Append one per-invocation outcome record to the run log."""
+        self._invocations.append(
+            {
+                "stage": stage,
+                "repair": repair,
+                "attempt": attempt,
+                "returncode": returncode,
+                "timed_out": timed_out,
+                "stdout_bytes": stdout_bytes,
+                "response": stdout_text,
+                "stderr_tail": _stderr_tail(stderr_bytes),
+                "tokens_in": tokens.get("in", 0),
+                "tokens_out": tokens.get("out", 0),
+                "tokens_total": tokens.get("total", 0),
+                "duration_ms": duration_ms,
+            }
+        )
+
     def _run_process(
         self,
         cmd: list[str],
@@ -298,8 +346,10 @@ class PiCliRunner:
         env: dict[str, str],
         *,
         repair: bool = False,
+        attempt: int | None = None,
     ) -> subprocess.CompletedProcess[bytes]:
         self._invocation_count += 1
+        started = time.monotonic()
         try:
             cp = subprocess.run(
                 cmd,
@@ -311,6 +361,18 @@ class PiCliRunner:
                 **({"cwd": str(self._working_dir)} if self._working_dir else {}),
             )
         except subprocess.TimeoutExpired as exc:
+            self._record_invocation(
+                stage=stage,
+                repair=repair,
+                attempt=attempt,
+                returncode=None,
+                timed_out=True,
+                stdout_bytes=len(exc.stdout or b""),
+                stdout_text=(exc.stdout or b"").decode(errors="replace"),
+                stderr_bytes=exc.stderr or b"",
+                tokens={},
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
             message = (
                 f"[review][ERROR] Pi {stage} repair timed out"
                 if repair
@@ -321,8 +383,21 @@ class PiCliRunner:
         for line in stderr_text.splitlines():
             marker = " repair (in session)" if repair and self.cfg.pi_session_enabled else " repair" if repair else ""
             _log(f"[pi {stage}{marker}] {line}")
+        tokens = self._parse_token_usage(stderr_text)
         self._record_context_reads(_parse_context_file_reads(stderr_text))
-        self._record_tokens(self._parse_token_usage(stderr_text))
+        self._record_tokens(tokens)
+        self._record_invocation(
+            stage=stage,
+            repair=repair,
+            attempt=attempt,
+            returncode=cp.returncode,
+            timed_out=False,
+            stdout_bytes=len(cp.stdout),
+            stdout_text=cp.stdout.decode(errors="replace"),
+            stderr_bytes=cp.stderr,
+            tokens=tokens,
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
         return cp
 
 
@@ -344,7 +419,7 @@ class PiCliRunner:
         attempts = max(1, self.cfg.pi_retry_attempts)
         last: subprocess.CompletedProcess[bytes] | None = None
         for attempt in range(1, attempts + 1):
-            cp = self._run_process(cmd, input_data, stage, env)
+            cp = self._run_process(cmd, input_data, stage, env, attempt=attempt)
             if cp.returncode == 0:
                 return cp
             last = cp

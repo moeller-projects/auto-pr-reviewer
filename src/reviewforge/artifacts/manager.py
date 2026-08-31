@@ -32,6 +32,7 @@ ARTIFACT_NAMES: tuple[str, ...] = (
     "crg-analysis.json",
     "graph-context.json",
     "comment-replies.json",
+    "pi-invocations.json",
 )
 
 
@@ -68,6 +69,7 @@ class Artifacts:
     run_log: Path
     crg_analysis: Path
     graph_context: Path
+    pi_invocations: Path
 
     def as_dict(self) -> dict[str, str]:
         """Return a dict mapping artifact name → absolute path string.
@@ -94,6 +96,7 @@ class Artifacts:
             "run.log": str(self.run_log),
             "graph-context.json": str(self.graph_context),
             "crg-analysis.json": str(self.crg_analysis),
+            "pi-invocations.json": str(self.pi_invocations),
         }
 
 
@@ -152,6 +155,7 @@ def create(cfg: Config) -> Artifacts:
         run_log=root / "run.log",
         crg_analysis=root / "crg-analysis.json",
         graph_context=root / "graph-context.json",
+        pi_invocations=root / "pi-invocations.json",
     )
 
 

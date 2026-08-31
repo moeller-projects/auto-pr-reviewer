@@ -1330,3 +1330,82 @@ class TestPrimaryRetry:
             "creating a new session with that id. | terminated"
         )
 
+
+# =====================================================================
+# Phase H — Per-invocation outcome records
+# =====================================================================
+
+
+class TestInvocationRecords:
+    """Each subprocess call appends an outcome record."""
+
+    def test_records_primary_and_retry_attempts(self, cfg, tmp_path, monkeypatch):
+        calls = []
+
+        def fake_run(cmd, input=b"", **k):
+            calls.append(list(cmd))
+            if len(calls) == 1:
+                return subprocess.CompletedProcess(cmd, 1, b"", b"terminated")
+            return subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"tokens 100 in / 50 out")
+
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ai.runner.time.sleep", lambda s: None)
+        cfg = replace(cfg, pi_retry_attempts=2, pi_retry_base_delay=0.0, pi_retry_cap_delay=0.0)
+        runner = PiRunner(cfg)
+        runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
+
+        records = runner.invocations
+        assert len(records) == 2
+        first, second = records
+        assert first["stage"] == "stage"
+        assert first["repair"] is False
+        assert first["attempt"] == 1
+        assert first["returncode"] == 1
+        assert first["timed_out"] is False
+        assert first["stderr_tail"] == "terminated"
+        assert first["tokens_total"] == 0
+        assert first["response"] == ""
+        assert second["attempt"] == 2
+        assert second["returncode"] == 0
+        assert second["response"] == '{"ok": true}'
+        assert second["tokens_in"] == 100
+
+    def test_records_repair_invocation(self, cfg, tmp_path, monkeypatch):
+        calls = []
+
+        def fake_run(cmd, input=b"", **k):
+            calls.append(list(cmd))
+            if len(calls) == 1:
+                return subprocess.CompletedProcess(cmd, 0, b"not json", b"")
+            return subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"")
+
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
+        cfg = replace(cfg, pi_retry_attempts=1)
+        runner = PiRunner(cfg)
+        runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
+
+        records = runner.invocations
+        assert records[0]["repair"] is False
+        assert records[0]["attempt"] == 1
+        assert records[0]["response"] == "not json"
+        assert records[1]["repair"] is True
+        assert records[1]["attempt"] is None
+        assert records[1]["response"] == '{"ok": true}'
+
+    def test_records_timeout(self, cfg, tmp_path, monkeypatch):
+        def fake_run(cmd, input=b"", **k):
+            raise subprocess.TimeoutExpired(cmd, 1, stderr=b"still running")
+
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
+        cfg = replace(cfg, pi_retry_attempts=1)
+        runner = PiRunner(cfg)
+        with pytest.raises(PiExecutionError, match="timed out"):
+            runner.run_json(tmp_path / "p.md", "in", tmp_path / "out.json", "stage")
+
+        records = runner.invocations
+        assert len(records) == 1
+        assert records[0]["timed_out"] is True
+        assert records[0]["returncode"] is None
+        assert records[0]["stderr_tail"] == "still running"
+
+

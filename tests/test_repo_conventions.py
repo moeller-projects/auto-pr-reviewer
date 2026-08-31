@@ -116,6 +116,7 @@ CANONICAL_ARTIFACT_NAMES: tuple[str, ...] = (
     "crg-analysis.json",
     "graph-context.json",
     "comment-replies.json",
+    "pi-invocations.json",
 )
 
 

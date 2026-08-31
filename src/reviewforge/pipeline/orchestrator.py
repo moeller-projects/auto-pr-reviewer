@@ -182,6 +182,7 @@ def run_full(cfg: Config) -> RunOutcome:
         write_json(artifacts.summary, finalize)
         return RunOutcome(exit_code=exit_code, summary=summary, stages=results)
     finally:
+        _write_pi_invocations(ctx)
         _cleanup_repo_state(ctx)
 
 
@@ -216,6 +217,7 @@ def run_review_only(cfg: Config, *, output: Path | None = None) -> RunOutcome:
             shutil.copyfile(artifacts.final, output)
         return RunOutcome(exit_code=exit_code, summary=summary, stages=results)
     finally:
+        _write_pi_invocations(ctx)
         _cleanup_repo_state(ctx)
 
 
@@ -291,6 +293,7 @@ def run_reply_only(cfg: Config) -> RunOutcome:
         write_json(artifacts.summary, finalize)
         return RunOutcome(exit_code=exit_code, summary=summary, stages=results)
     finally:
+        _write_pi_invocations(ctx)
         _cleanup_repo_state(ctx)
 
 
@@ -328,6 +331,19 @@ def _cleanup_repo_state(ctx: StageContext) -> None:
     except Exception as exc:  # pragma: no cover - best effort cleanup
         log_info(f"repository cleanup failed: {type(exc).__name__}: {exc}")
 
+
+def _write_pi_invocations(ctx: StageContext) -> None:
+    """Persist per-invocation Pi outcome records to ``pi-invocations.json``."""
+    pi = getattr(ctx, "pi", None)
+    if pi is None:
+        return
+    invocations = getattr(pi, "invocations", None)
+    if not isinstance(invocations, list) or not invocations:
+        return
+    try:
+        write_json(ctx.artifacts.pi_invocations, invocations)
+    except Exception as exc:  # noqa: BLE001 - best-effort diagnostics
+        log_info(f"failed to write pi-invocations.json: {type(exc).__name__}: {exc}")
 
 __all__ = [
     "RunOutcome",
