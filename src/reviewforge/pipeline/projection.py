@@ -57,6 +57,7 @@ def _legacy_evidence(evidence: Any) -> dict[str, Any]:
         "whyNewInThisPr": evidence.whyNewInThisPr if evidence else "",
         "whyNotIntentional": evidence.whyNotIntentional if evidence else "",
         "classification": evidence.classification if evidence else "",
+        "threads": list(evidence.threads) if evidence else [],
     }
 
 

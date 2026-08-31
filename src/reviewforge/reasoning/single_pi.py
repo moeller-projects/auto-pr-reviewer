@@ -16,7 +16,14 @@ from ..artifacts.builder import read_json
 from ..exceptions import ReasoningEngineError, SchemaValidationError
 from ..git import ops as git_ops
 from ..ado.posting import _normalize_title
-from ..pipeline.schemas import ChunkResult, ChunkSynthesis, ReviewResult, TokenUsage
+from ..pipeline.schemas import (
+    ChunkResult,
+    ChunkSynthesis,
+    EscalationHint,
+    ReviewConfidence,
+    ReviewResult,
+    TokenUsage,
+)
 from ..pipeline.stage import StageContext
 from ..runlog import warning as log_warning
 from .engine import ReasoningEngine, register_engine
@@ -238,14 +245,19 @@ def _build_chunk_instruction(
     prefix = _build_single_pi_prefix(ctx) if include_shared_prefix or index == 1 else ""
     body = (
         f"Review chunk {index}/{total} of the same PR diff. "
-        "Return only a JSON object with findings and uncertainties; do not summarize the PR.\n"
+        "Return only a JSON object with findings, test_gaps, uncertainties, "
+        "escalation_hints, and discarded_findings; do not summarize the PR.\n"
         f"Unified diff chunk:\n{chunk}"
     )
     return f"{prefix}\n\n{body}" if prefix else body
 
 
 def _synthesis_lines(
-    findings: list[dict[str, Any]], uncertainties: list[dict[str, Any]]
+    findings: list[dict[str, Any]],
+    uncertainties: list[dict[str, Any]],
+    test_gaps: list[dict[str, Any]],
+    escalation_hints: list[dict[str, Any]],
+    discarded_findings: list[dict[str, Any]],
 ) -> list[str]:
     lines = []
     for finding in findings:
@@ -254,15 +266,35 @@ def _synthesis_lines(
             location = f"{location}:{finding['line']}"
         lines.append(f"- [{finding.get('severity', 'minor')}] {finding.get('title', '')} ({location})")
     lines.append("- none" if not findings else "")
+    lines.append("Merged test gaps across all chunks:")
+    lines.extend(f"- {gap.get('file', '')}: {gap.get('behavior', '')}" for gap in test_gaps)
+    if not test_gaps:
+        lines.append("- none")
+    lines.append("Merged escalation hints across all chunks:")
+    lines.extend(
+        f"- [{hint.get('danger', 'high')}] {hint.get('suggested_focus', '')}: {hint.get('reason', '')}"
+        for hint in escalation_hints
+    )
+    if not escalation_hints:
+        lines.append("- none")
+    lines.append("Merged discarded findings across all chunks:")
+    lines.extend(f"- {item.get('category', '')}: {item.get('reason', '')}" for item in discarded_findings)
+    if not discarded_findings:
+        lines.append("- none")
     lines.append("Merged uncertainties across all chunks:")
     lines.extend(f"- {item.get('topic', '')}" for item in uncertainties)
     if not uncertainties:
         lines.append("- none")
     return lines
+
+
 def _build_synthesis_instruction(
     chunk_count: int,
     findings: list[dict[str, Any]],
     uncertainties: list[dict[str, Any]],
+    test_gaps: list[dict[str, Any]] | None = None,
+    escalation_hints: list[dict[str, Any]] | None = None,
+    discarded_findings: list[dict[str, Any]] | None = None,
 ) -> str:
     """Build the whole-PR synthesis request; no diff is re-sent."""
     lines = [
@@ -271,7 +303,15 @@ def _build_synthesis_instruction(
         "",
         "Merged findings across all chunks:",
     ]
-    lines.extend(_synthesis_lines(findings, uncertainties))
+    lines.extend(
+        _synthesis_lines(
+            findings,
+            uncertainties or [],
+            test_gaps or [],
+            escalation_hints or [],
+            discarded_findings or [],
+        )
+    )
     lines.extend(["", "Return only the chunk-synthesis JSON object defined in the system prompt."])
     return "\n".join(lines)
 
@@ -302,25 +342,54 @@ def _single_pass(ctx: StageContext, cfg: Any) -> ReviewResult:
         raise SchemaValidationError("single-pi response does not match ReviewResult schema", details={"error": str(exc), "output_path": str(output_path)}) from exc
 
 
-def _merge_chunk(
-    partial: ChunkResult,
-    seen: set[tuple[str | None, int | None, str]],
-    findings: list[dict[str, Any]],
-    uncertainties: list[dict[str, Any]],
-) -> None:
+def _new_merge_state() -> dict[str, Any]:
+    return {
+        "findings": [],
+        "test_gaps": [],
+        "uncertainties": [],
+        "escalation_hints": [],
+        "discarded_findings": [],
+        "seen_findings": set(),
+        "seen_gaps": set(),
+        "seen_hints": set(),
+        "seen_uncertainties": set(),
+    }
+
+
+def _merge_chunk(partial: ChunkResult, state: dict[str, Any]) -> None:
     for finding in partial.findings:
         key = (finding.file, finding.line, _normalize_title(finding.title))
-        if key not in seen:
-            seen.add(key)
-            findings.append(finding.model_dump(by_alias=True))
-    uncertainties.extend(item.model_dump(by_alias=True) for item in partial.uncertainties)
+        if key not in state["seen_findings"]:
+            state["seen_findings"].add(key)
+            state["findings"].append(finding.model_dump(by_alias=True))
+    for gap in partial.test_gaps:
+        key = (gap.file, gap.behavior.casefold().strip())
+        if key not in state["seen_gaps"]:
+            state["seen_gaps"].add(key)
+            state["test_gaps"].append(gap.model_dump(by_alias=True))
+    for hint in partial.escalation_hints:
+        key = (tuple(sorted(hint.files)), hint.reason.casefold().strip())
+        if key not in state["seen_hints"]:
+            state["seen_hints"].add(key)
+            state["escalation_hints"].append(hint.model_dump(by_alias=True))
+    for item in partial.uncertainties:
+        key = (item.topic.casefold().strip(), item.reason.casefold().strip())
+        if key not in state["seen_uncertainties"]:
+            state["seen_uncertainties"].add(key)
+            state["uncertainties"].append(item.model_dump(by_alias=True))
+    state["discarded_findings"].extend(item.model_dump(by_alias=True) for item in partial.discarded_findings)
+
+
+def _cap_and_order_hints(hints: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    ordered = sorted(hints, key=lambda h: 0 if h.get("danger") == "critical" else 1)
+    return ordered[:3]
 
 
 def _chunked_pass(
     engine: Any, ctx: StageContext, cfg: Any, chunks: list[str]
 ) -> tuple[ReviewResult, list[TokenUsage]]:
-    findings, uncertainties, usage = [], [], []
-    seen: set[tuple[str | None, int | None, str]] = set()
+    state = _new_merge_state()
+    usage: list[TokenUsage] = []
     previous_tokens = _runner_usage(ctx.pi)
     repeat_prefix = not cfg.pi_session_enabled or cfg.pi_session_clear
     for index, chunk in enumerate(chunks, 1):
@@ -347,8 +416,15 @@ def _chunked_pass(
             )
         )
         previous_tokens = current
-        _merge_chunk(partial, seen, findings, uncertainties)
-    synthesis = engine._synthesize(ctx, len(chunks), findings, uncertainties)
+        _merge_chunk(partial, state)
+    findings = state["findings"]
+    test_gaps = state["test_gaps"][:5]
+    escalation_hints = _cap_and_order_hints(state["escalation_hints"])
+    uncertainties = state["uncertainties"]
+    discarded_findings = state["discarded_findings"]
+    synthesis = engine._synthesize(
+        ctx, len(chunks), findings, uncertainties, test_gaps, escalation_hints, discarded_findings
+    )
     payload = (
         {
             "review_summary": synthesis.review_summary.model_dump(),
@@ -360,13 +436,190 @@ def _chunked_pass(
         else {
             "review_summary": {"summary": f"Reviewed {len(chunks)} coherent diff chunks."},
             "verification_summary": {"summary": "Reviewed each deterministic unified-diff chunk.", "approach": "chunked diff review"},
-            "pr_summary": {"implementation_summary": f"Reviewed {len(chunks)} unified-diff chunks."},
+            "pr_summary": {
+                "intent": f"Pull request reviewed across {len(chunks)} unified-diff chunks.",
+                "work_type": "mixed",
+                "biggest_unknown": "chunk synthesis unavailable",
+                "implementation_summary": f"Reviewed {len(chunks)} unified-diff chunks.",
+            },
         }
     )
     if synthesis is None:
         ctx.extras["_synthesis_fallback"] = True
-    payload.update(findings=findings, uncertainties=uncertainties)
+    payload.update(
+        findings=findings,
+        test_gaps=test_gaps,
+        uncertainties=uncertainties,
+        escalation_hints=escalation_hints,
+        discarded_findings=discarded_findings,
+    )
     return ReviewResult.model_validate(payload), usage
+
+
+def _graph_architecture_present(ctx: StageContext) -> bool:
+    graph = ctx.extras.get("graph_context")
+    if not isinstance(graph, dict):
+        return False
+    architecture = graph.get("architecture")
+    return isinstance(architecture, dict) and architecture.get("status") == "ok"
+
+
+def _confidence_rank(level: str | None) -> int:
+    return {"low": 1, "medium": 2, "high": 3}.get(level or "", 1)
+
+
+def _rank_to_confidence(rank: int) -> str:
+    return {1: "low", 2: "medium", 3: "high"}[max(1, min(3, rank))]
+
+
+def _derive_review_confidence(result: ReviewResult) -> tuple[str, list[str]]:
+    base = min(
+        (_confidence_rank(f.confidence) for f in result.findings),
+        default=3,
+    )
+    downgrade_reasons: list[str] = []
+    if result.pr_summary.biggest_unknown:
+        downgrade_reasons.append("biggest_unknown unresolved")
+    if any(u.topic.startswith("cross-chunk:") for u in result.uncertainties):
+        downgrade_reasons.append("unresolved cross-chunk uncertainty")
+    rank = max(1, base - (1 if downgrade_reasons else 0))
+    level = _rank_to_confidence(rank)
+    reasons: list[str] = []
+    if not result.findings:
+        reasons.append("no findings; context was sufficient")
+    else:
+        reasons.append("derived from lowest reported finding confidence")
+    reasons.extend(downgrade_reasons)
+    return level, reasons
+
+
+def _evidence_counts(result: ReviewResult) -> dict[str, int]:
+    tests: set[str] = set()
+    symbols: set[str] = set()
+    work_items: set[str] = set()
+    for finding in result.findings:
+        evidence = finding.evidence
+        tests.update(evidence.testsRead)
+        work_items.update(evidence.workItems)
+        symbols.update(symbol.name for symbol in evidence.symbols if symbol.name)
+    return {
+        "testsRead": len(tests),
+        "symbolsInspected": len(symbols),
+        "workItemsRead": len(work_items),
+    }
+
+
+def _normalize_review(result: ReviewResult, ctx: StageContext) -> ReviewResult:
+    """Apply deterministic post-processing the model cannot know."""
+    if not _graph_architecture_present(ctx):
+        result.pr_summary.architectural_impact = "no significant architectural impact"
+    level, reasons = _derive_review_confidence(result)
+    result.review_confidence = ReviewConfidence(level=level, reasons=reasons)
+    counts = _evidence_counts(result)
+    result.metrics = result.metrics.model_copy(
+        update={
+            "confidence": level,
+            "testsRead": max(result.metrics.testsRead, counts["testsRead"]),
+            "symbolsInspected": max(result.metrics.symbolsInspected, counts["symbolsInspected"]),
+            "workItemsRead": max(result.metrics.workItemsRead, counts["workItemsRead"]),
+        }
+    )
+    return result
+
+
+def _escalation_instruction(hints: list[EscalationHint], diff_text: str) -> str:
+    files = sorted({f for hint in hints for f in hint.files})
+    lines = [
+        "Focused escalation review for the file set named below. Re-review only "
+        "these files for the listed risks and return the full ReviewResult JSON object.",
+        "",
+        "Files:",
+        *[f"- {f}" for f in files],
+        "",
+        "Escalation hints:",
+    ]
+    for hint in hints:
+        lines.append(f"- [{hint.danger}] {hint.suggested_focus}: {hint.reason} ({', '.join(hint.files)})")
+    lines.extend(["", "Unified diff:", diff_text])
+    return "\n".join(lines) + "\nReturn only the ReviewResult JSON object defined in the system prompt.\n"
+
+
+def _run_escalation_pass(
+    engine: Any, ctx: StageContext, result: ReviewResult
+) -> ReviewResult | None:
+    """Optionally run a focused deeper pass over escalation-hinted files."""
+    cfg = ctx.cfg
+    if not getattr(cfg, "escalation_review_enabled", False) or not result.escalation_hints:
+        return None
+    diff_text = getattr(ctx.state, "diff_text", "") or ""
+    instruction = _escalation_instruction(list(result.escalation_hints), diff_text)
+    output_path = ctx.artifacts.raw_dir / "escalation-review.json"
+    model = getattr(cfg, "escalation_model", None)
+    runner = ctx.pi
+    if model and model != cfg.pi_model:
+        from ..ai.model_runner import create_model_runner
+
+        session_id = getattr(ctx.pi, "session_id", None)
+        overrides: dict[str, Any] = {"pi_model": model}
+        if session_id:
+            overrides["pi_session_id"] = f"{session_id}-escalation"
+        new_cfg = cfg.with_overrides(**overrides)
+        runner = create_model_runner(new_cfg)
+        set_working_dir = getattr(runner, "set_working_dir", None)
+        if callable(set_working_dir):
+            set_working_dir(getattr(ctx.state, "repo_dir", None))
+    try:
+        runner.run_json(cfg.fast_review_prompt_path, instruction, output_path, "escalation review")
+        focused = ReviewResult.model_validate(read_json(output_path))
+    except Exception as exc:  # noqa: BLE001 - escalation must never fail a review
+        log_warning(
+            f"escalation review unavailable ({type(exc).__name__}: {exc}); retaining primary review"
+        )
+        return None
+    if runner is not ctx.pi:
+        ctx.extras["_escalation_usage"] = _runner_usage(runner)
+    return focused
+
+
+def _merge_escalation(base: ReviewResult, focused: ReviewResult) -> ReviewResult:
+    """Incorporate a focused pass: it replaces revisited findings, adds new ones."""
+    focused_keys = {
+        (f.file, f.line, _normalize_title(f.title)) for f in focused.findings
+    }
+    findings = [f.model_dump(by_alias=True) for f in focused.findings]
+    findings.extend(
+        f.model_dump(by_alias=True)
+        for f in base.findings
+        if (f.file, f.line, _normalize_title(f.title)) not in focused_keys
+    )
+    gaps: dict[tuple[str, str], dict[str, Any]] = {}
+    for gap in base.test_gaps:
+        gaps[(gap.file, gap.behavior.casefold())] = gap.model_dump(by_alias=True)
+    for gap in focused.test_gaps:
+        gaps[(gap.file, gap.behavior.casefold())] = gap.model_dump(by_alias=True)
+    test_gaps = list(gaps.values())[:5]
+    hints: dict[tuple[tuple[str, ...], str], dict[str, Any]] = {}
+    for hint in base.escalation_hints:
+        hints[(tuple(sorted(hint.files)), hint.reason.casefold())] = hint.model_dump(by_alias=True)
+    for hint in focused.escalation_hints:
+        hints[(tuple(sorted(hint.files)), hint.reason.casefold())] = hint.model_dump(by_alias=True)
+    escalation_hints = _cap_and_order_hints(list(hints.values()))
+    uncertainties = [
+        u.model_dump(by_alias=True) for u in (*base.uncertainties, *focused.uncertainties)
+    ]
+    discarded = [
+        d.model_dump(by_alias=True)
+        for d in (*base.discarded_findings, *focused.discarded_findings)
+    ]
+    payload = base.model_dump(by_alias=True)
+    payload.update(
+        findings=findings,
+        test_gaps=test_gaps,
+        uncertainties=uncertainties,
+        escalation_hints=escalation_hints,
+        discarded_findings=discarded,
+    )
+    return ReviewResult.model_validate(payload)
 
 
 def _update_metrics(
@@ -374,6 +627,12 @@ def _update_metrics(
     finished_at: float, reasoning_duration_ms: int, chunks: list[str], chunk_usage: list[TokenUsage],
 ) -> ReviewResult:
     tokens = _runner_usage(ctx.pi)
+    escalation = ctx.extras.get("_escalation_usage") or {}
+    tokens = {
+        "in": tokens.get("in", 0) + int(escalation.get("in", 0) or 0),
+        "out": tokens.get("out", 0) + int(escalation.get("out", 0) or 0),
+        "total": tokens.get("total", 0) + int(escalation.get("total", 0) or 0),
+    }
     result.metrics = result.metrics.model_copy(update={
         "piInputTokens": tokens.get("in", 0), "piOutputTokens": tokens.get("out", 0),
         "piTotalTokens": tokens.get("total", 0), "invocationCount": _runner_count(ctx.pi, "invocation_count"),
@@ -407,6 +666,10 @@ class SinglePiReasoningEngine(ReasoningEngine):
             chunk_usage: list[TokenUsage] = []
         else:
             result, chunk_usage = _chunked_pass(self, ctx, cfg, chunks)
+        focused = _run_escalation_pass(self, ctx, result)
+        if focused is not None:
+            result = _merge_escalation(result, focused)
+        result = _normalize_review(result, ctx)
         reasoning_duration_ms = int((time.perf_counter() - reasoning_started) * 1000)
         tokens = _runner_usage(ctx.pi)
         ctx.last_token_usage = tokens
@@ -420,13 +683,19 @@ class SinglePiReasoningEngine(ReasoningEngine):
         chunk_count: int,
         findings: list[dict[str, Any]],
         uncertainties: list[dict[str, Any]],
+        test_gaps: list[dict[str, Any]] | None = None,
+        escalation_hints: list[dict[str, Any]] | None = None,
+        discarded_findings: list[dict[str, Any]] | None = None,
     ) -> ChunkSynthesis | None:
         """Ask Pi for whole-PR summaries; ``None`` means use boilerplate."""
         output_path = ctx.artifacts.raw_dir / "chunk-synthesis.json"
         try:
             ctx.pi.run_json(
                 ctx.cfg.chunk_synthesis_prompt_path,
-                _build_synthesis_instruction(chunk_count, findings, uncertainties),
+                _build_synthesis_instruction(
+                    chunk_count, findings, uncertainties,
+                    test_gaps, escalation_hints, discarded_findings,
+                ),
                 output_path,
                 "single-pi synthesis",
             )

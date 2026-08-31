@@ -54,6 +54,9 @@ def _execution_details(ctx: StageContext, engine: Any, result: ReviewResult, sar
     details: dict[str, Any] = {
         "engine": engine.name,
         "findings": len(result.findings),
+        "test_gaps": len(result.test_gaps),
+        "escalation_hints": len(result.escalation_hints),
+        "discarded_findings": len(result.discarded_findings),
         "review_result": str(ctx.artifacts.review_result),
         "final_findings": str(ctx.artifacts.final),
         "metrics": result.metrics.model_dump(by_alias=True, exclude_none=False),

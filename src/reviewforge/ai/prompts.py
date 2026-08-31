@@ -42,6 +42,14 @@ def language_directive(cfg: Config) -> str:
     )
 
 
+def _compose(source: Path, cfg: Config, *, include_standards: bool) -> str:
+    """Return a prompt body plus optional standards, ending with the directive."""
+    body = source.read_text(encoding="utf-8")
+    if include_standards:
+        body += "\n\n---\n\n" + cfg.standards_path.read_text(encoding="utf-8")
+    return body + language_directive(cfg)
+
+
 def system_prompt(cfg: Config) -> str:
     """Combine reviewer prompt, standards file, and the language directive.
 
@@ -51,41 +59,33 @@ def system_prompt(cfg: Config) -> str:
     previously buried between two large prompt blocks where it was
     effectively ignored.
     """
-    return (
-        cfg.review_prompt_path.read_text()
-        + "\n\n---\n\n"
-        + cfg.standards_path.read_text()
-        + language_directive(cfg)
-    )
+    return _compose(cfg.review_prompt_path, cfg, include_standards=True)
 
 
-def augment_prompt_file(source: Path, cfg: Config, dest: Path | None = None) -> Path:
-    """Return a copy of ``source`` with the language directive appended.
+def augment_prompt_file(
+    source: Path,
+    cfg: Config,
+    dest: Path | None = None,
+    *,
+    include_standards: bool = False,
+) -> Path:
+    """Return a copy of ``source`` with standards and/or the language directive.
 
     Pi loads the system prompt from a file (see
     :func:`reviewforge.ai.runner.PiRunner._build_cmd`), and the
     per-stage prompt files (``review-system.md``, ``verify-findings.md``,
     ``severity.md`` …) are generic templates that don't know the runtime
     language. This helper writes a side-by-side copy with the runtime
-    directive appended so every stage sees the same instruction.
+    directive appended so every stage sees the same instruction. Review
+    prompts additionally append the configured coding standards.
 
     ``dest`` defaults to ``source.with_suffix(source.suffix + ".lang")``
     in the same directory. Callers should treat the returned path as
-    cached: re-calling with the same ``source`` returns the same path.
+    cached: re-calling with the same ``source`` and options returns the
+    same path.
     """
     if dest is None:
         dest = source.with_name(source.name + ".lang")
-    if dest.exists():
-        # Cheap idempotence: the source prompt file is read-only, and the
-        # directive is fully determined by cfg.review_language, so a
-        # pre-existing file with our sentinel means we already augmented
-        # this source. Avoids redundant disk I/O on repeated stage calls.
-        try:
-            head = dest.read_text(encoding="utf-8")
-        except OSError:
-            head = ""
-        if LANGUAGE_DIRECTIVE_PREFIX in head and cfg.review_language in head:
-            return dest
     try:
         body = source.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -96,7 +96,16 @@ def augment_prompt_file(source: Path, cfg: Config, dest: Path | None = None) -> 
         # simple without changing production behavior (where the file
         # is always shipped with the image).
         return source
-    dest.write_text(body + language_directive(cfg), encoding="utf-8")
+    if include_standards:
+        body += "\n\n---\n\n" + cfg.standards_path.read_text(encoding="utf-8")
+    text = body + language_directive(cfg)
+    if dest.exists():
+        try:
+            if dest.read_text(encoding="utf-8") == text:
+                return dest
+        except OSError:
+            pass
+    dest.write_text(text, encoding="utf-8")
     return dest
 
 

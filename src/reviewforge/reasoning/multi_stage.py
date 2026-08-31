@@ -143,6 +143,8 @@ def _build_result(
         discarded_findings=[],
         good_practices=[],
         uncertainties=[],
+        test_gaps=[],
+        escalation_hints=[],
         metrics=ReviewMetrics(
             changedFilesReviewed=len(getattr(ctx.state, "files", [])),
             testsRead=len(ctx.collected.get("tests", [])) if ctx.collected else 0,
@@ -192,6 +194,8 @@ class MultiStageReasoningEngine(ReasoningEngine):
         digest = ctx.digest or {}
         return PrSummary(
             intent=intent.get("pr_intent", ""),
+            work_type="mixed",
+            biggest_unknown=None,
             implementation_summary=intent.get("pr_intent", ""),
             architectural_impact="\n".join(intent.get("risk_areas", [])),
             risk_assessment="\n".join(intent.get("risk_areas", [])),

@@ -177,6 +177,9 @@ def _evidence_parts(evidence: Mapping[str, Any]) -> list[str]:
     if evidence.get("contextFilesRead"):
         files = join_list(list(evidence["contextFilesRead"])[:10])
         parts.append(f"> **Context read:** {files}")
+    if evidence.get("threads"):
+        threads = join_list(list(evidence["threads"])[:10])
+        parts.append(f"> **Prior threads:** {threads}")
     return parts
 
 

@@ -166,6 +166,7 @@ class TestPiRunnerEdgeCases:
         )
         source = tmp_path / "r.md"
         source.write_text("base review", encoding="utf-8")
+        (tmp_path / "st.md").write_text("coding standards", encoding="utf-8")
         seen_cmd: list[list[str]] = []
 
         def fake_run(cmd, input, stdout, stderr, timeout, env):
@@ -184,6 +185,7 @@ class TestPiRunnerEdgeCases:
         assert used != source
         text = used.read_text(encoding="utf-8")
         assert text.startswith("base review")
+        assert "coding standards" in text
         assert "in German" in text
 
     def test_stderr_lines_are_logged(self, tmp_path, monkeypatch, capsys):

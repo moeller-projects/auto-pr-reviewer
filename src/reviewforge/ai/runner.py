@@ -184,22 +184,47 @@ class PiCliRunner:
         return self.cfg.pi_session_id or _default_session_id(self.cfg)
 
     def _resolve_system_prompt(self, prompt_path: Path) -> Path:
-        """Return a system-prompt path that ends with the LANGUAGE directive.
+        """Return a system-prompt path with standards and/or the directive.
 
-        Pi only reads the prompt file once per call, so we materialize the
-        augmented version on disk and cache it for the lifetime of this
-        runner. Caching is keyed on the source ``Path`` (not its contents)
-        because the source prompt files are static templates shipped with
-        the package.
+        Review prompts (the fast single-pi prompt and the legacy review
+        prompt) also receive the configured coding standards. Pi only reads
+        the prompt file once per call, so we materialize the augmented
+        version on disk and cache it for the lifetime of this runner.
+        Caching is keyed on the source ``Path`` (not its contents) because
+        the source prompt files are static templates shipped with the
+        package.
         """
         cached = self._prompt_cache.get(prompt_path)
         if cached is not None:
             return cached
+        include_standards = self._is_review_prompt(prompt_path)
         path_hash = hashlib.sha1(str(prompt_path.resolve()).encode("utf-8")).hexdigest()[:8]
         dest = self._prompt_dir / f"{prompt_path.stem}.{path_hash}.lang.md"
-        augmented = augment_prompt_file(prompt_path, self.cfg, dest=dest)
+        augmented = augment_prompt_file(
+            prompt_path, self.cfg, dest=dest, include_standards=include_standards
+        )
         self._prompt_cache[prompt_path] = augmented
         return augmented
+
+    def _is_review_prompt(self, prompt_path: Path) -> bool:
+        """Return True when ``prompt_path`` is one of the review prompts."""
+        try:
+            resolved = prompt_path.resolve()
+        except OSError:
+            resolved = prompt_path
+        for candidate in (
+            getattr(self.cfg, "fast_review_prompt_path", None),
+            getattr(self.cfg, "review_prompt_path", None),
+        ):
+            if candidate is None:
+                continue
+            try:
+                if Path(candidate).resolve() == resolved:
+                    return True
+            except OSError:
+                if Path(candidate) == resolved:
+                    return True
+        return False
 
     def _build_cmd(self, prompt_path: Path, instruction: str) -> list[str]:
         """Compose the Pi CLI command, including session flags when enabled."""
@@ -214,7 +239,7 @@ class PiCliRunner:
             "--no-prompt-templates",
             "--tools", "read,grep",
             "--model", self.cfg.pi_model,
-            "--thinking", "medium",
+            "--thinking", getattr(self.cfg, "pi_thinking", "medium"),
             "--append-system-prompt", str(prompt_path),
             "-p", instruction,
         ]

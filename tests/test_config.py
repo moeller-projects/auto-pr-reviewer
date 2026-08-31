@@ -36,6 +36,11 @@ class TestFromEnvBranches:
         monkeypatch.setenv("CLONE_ROOT", str(tmp_path))
         return monkeypatch
 
+    def test_pi_thinking_default_and_override(self, base_env):
+        assert Config.from_env().pi_thinking == "medium"
+        base_env.setenv("PI_THINKING", "high")
+        assert Config.from_env().pi_thinking == "high"
+
     def test_invalid_numeric_overrides_fall_back(self, base_env):
         base_env.setenv("MAX_FINDINGS", "not-a-number")
         base_env.setenv("CONTEXT_FILE_MAX_LINES", "bogus")

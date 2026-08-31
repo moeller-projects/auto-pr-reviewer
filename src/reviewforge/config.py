@@ -274,6 +274,14 @@ class Config:
     fast_review_prompt_path: Path = field(default=DEFAULT_FAST_REVIEW_PROMPT_PATH, compare=False)
     #: System prompt for the whole-PR synthesis call after chunked reviews.
     chunk_synthesis_prompt_path: Path = field(default=DEFAULT_CHUNK_SYNTHESIS_PROMPT_PATH, compare=False)
+    # --- Escalation review -------------------------------------------------
+    #: When ``True``, run a focused second review pass over the files named by
+    #: ``escalation_hints``. Default off; hints are still recorded as artifacts.
+    escalation_review_enabled: bool = field(default=False, compare=False)
+    #: Optional model for the focused escalation pass. Defaults to ``pi_model``.
+    escalation_model: str | None = field(default=None, compare=False)
+    #: Pi reasoning effort passed via ``--thinking``. Default ``medium``.
+    pi_thinking: str = field(default="medium", compare=False)
     # --- Comment replies ---------------------------------------------------
     #: When ``True`` (default), answer unanswered human replies on bot
     #: threads after posting findings, and enable ``reviewforge reply``.
@@ -405,6 +413,7 @@ class Config:
             severity_prompt_path=_resolve_prompt_path("SEVERITY_PROMPT_PATH", str(DEFAULT_SEVERITY_PROMPT_PATH)),
             standards_path=Path(os.getenv("REVIEW_STANDARDS_PATH", str(DEFAULT_STANDARDS_PATH))),
             pi_model=os.getenv("PI_MODEL", "openai/gpt-5.5"),
+            pi_thinking=os.getenv("PI_THINKING", "medium"),
             max_diff_bytes=max_diff_bytes,
             chunk_trigger_diff_bytes=require_uint("CHUNK_TRIGGER_DIFF_BYTES", chunk_trigger_raw),
             disable_chunk_review=is_true(os.getenv("DISABLE_CHUNK_REVIEW")),
@@ -442,6 +451,8 @@ class Config:
             fast_review=fast_review,
             fast_review_prompt_path=fast_review_prompt_path,
             chunk_synthesis_prompt_path=chunk_synthesis_prompt_path,
+            escalation_review_enabled=is_true(os.getenv("ESCALATION_REVIEW_ENABLED")),
+            escalation_model=os.getenv("ESCALATION_REVIEW_MODEL") or None,
             reply_comments=reply_comments,
             comment_reply_prompt_path=comment_reply_prompt_path,
             crg_enabled=is_true(os.getenv("CRG_ENABLED")),
@@ -817,6 +828,7 @@ def _build_from_sources(
             str(DEFAULT_STANDARDS_PATH),
         ),
         pi_model=cli_or_env("pi_model", "PI_MODEL", "openai/gpt-5.5"),
+        pi_thinking=cli_or_env("pi_thinking", "PI_THINKING", "medium"),
         max_diff_bytes=max_diff_bytes,
         chunk_trigger_diff_bytes=chunk_trigger_diff_bytes,
         disable_chunk_review=is_true(cli_or_env("disable_chunk_review", "DISABLE_CHUNK_REVIEW")),
@@ -856,6 +868,8 @@ def _build_from_sources(
             cli_or_env("chunk_synthesis_prompt_path", "CHUNK_SYNTHESIS_PROMPT_PATH"),
             str(DEFAULT_CHUNK_SYNTHESIS_PROMPT_PATH),
         ),
+        escalation_review_enabled=is_true(cli_or_env("escalation_review_enabled", "ESCALATION_REVIEW_ENABLED")),
+        escalation_model=cli_or_env("escalation_model", "ESCALATION_REVIEW_MODEL") or None,
         reply_comments=_coerce_bool(cli.get("reply_comments"), default=True, env_value=env.get("REPLY_COMMENTS")),
         comment_reply_prompt_path=to_path(
             cli_or_env("comment_reply_prompt_path", "COMMENT_REPLY_PROMPT_PATH"),

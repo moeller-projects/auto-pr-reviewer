@@ -247,7 +247,12 @@ def _review_result(findings: list[dict]) -> dict:
     return {
         "review_summary": {"summary": "reviewed"},
         "verification_summary": {"summary": "verified", "approach": "single pi"},
-        "pr_summary": {"implementation_summary": "did things"},
+        "pr_summary": {
+            "intent": "did things",
+            "work_type": "change",
+            "biggest_unknown": None,
+            "implementation_summary": "did things",
+        },
         "findings": findings,
         "uncertainties": [],
     }
@@ -325,7 +330,12 @@ class TestFullRunEndToEnd:
                 return {
                     "review_summary": {"summary": "synthesized whole-PR summary"},
                     "verification_summary": {"summary": "verified across chunks"},
-                    "pr_summary": {"implementation_summary": "synthesized implementation"},
+                    "pr_summary": {
+                        "intent": "synthesized implementation",
+                        "work_type": "change",
+                        "biggest_unknown": None,
+                        "implementation_summary": "synthesized implementation",
+                    },
                 }
             return {"findings": [finding], "uncertainties": []}
 

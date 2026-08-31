@@ -120,6 +120,8 @@ def _valid_review_result_payload() -> dict[str, Any]:
         },
         "pr_summary": {
             "intent": "Add a new helper.",
+            "work_type": "change",
+            "biggest_unknown": None,
             "implementation_summary": "Clean change.",
             "architectural_impact": "",
             "risk_assessment": "",
@@ -212,11 +214,10 @@ class TestChunkSynthesisHelpers:
         )
         assert "3 coherent diff chunks" in text
         assert "[major] Bug (a.py:7)" in text
-        assert "- Rollout risk" in text
-
     def test_synthesis_instruction_handles_empty_merges(self):
         text = _build_synthesis_instruction(2, [], [])
-        assert text.count("- none") == 2
+        assert text.count("- none") == 5
+
 
 class TestEngineRegistry:
     def test_built_in_engines_registered(self):
@@ -495,7 +496,12 @@ class TestSinglePiReasoningEngine:
                 builder.write_json(out, {
                     "review_summary": {"summary": "Solid chunk synthesis."},
                     "verification_summary": {"summary": "Verified per chunk."},
-                    "pr_summary": {"implementation_summary": "Did the thing."},
+                    "pr_summary": {
+                        "intent": "Did the thing.",
+                        "work_type": "change",
+                        "biggest_unknown": None,
+                        "implementation_summary": "Did the thing.",
+                    },
                 })
                 return
             builder.write_json(out, partials[len(calls)])
@@ -536,6 +542,12 @@ class TestSinglePiReasoningEngine:
                 pi.token_usage = token_usage[2]
                 builder.write_json(out, {
                     "review_summary": {"summary": "Synthesized."},
+                    "pr_summary": {
+                        "intent": "Add a helper.",
+                        "work_type": "change",
+                        "biggest_unknown": None,
+                        "implementation_summary": "Clean change.",
+                    },
                 })
                 return
             idx = len(prompts)
@@ -658,6 +670,127 @@ class TestSinglePiReasoningEngine:
         assert details["synthesisFallback"] is True
 
 
+
+class TestChunkSectionMerge:
+    def test_merges_gaps_hints_and_discarded(self, tmp_path: Path):
+        cfg = replace(_cfg(tmp_path), max_diff_bytes=55, chunk_trigger_diff_bytes=1)
+        pi = MagicMock()
+        partials = [
+            {
+                "findings": [],
+                "test_gaps": [{"behavior": "edge case", "suggested_test": "add test", "file": "a.py"}],
+                "uncertainties": [],
+                "escalation_hints": [
+                    {"files": ["a.py"], "reason": "auth path", "suggested_focus": "security-audit", "danger": "critical"}
+                ],
+                "discarded_findings": [{"reason": "out of scope", "category": "out-of-scope", "count": 1}],
+            },
+            {
+                "findings": [],
+                "test_gaps": [{"behavior": "edge case", "suggested_test": "add test", "file": "a.py"}],
+                "uncertainties": [],
+                "escalation_hints": [
+                    {"files": ["a.py"], "reason": "auth path", "suggested_focus": "security-audit", "danger": "critical"}
+                ],
+                "discarded_findings": [],
+            },
+        ]
+        calls = []
+
+        def fake_run_json(_p, _s, out, stage):
+            if stage == "single-pi synthesis":
+                builder.write_json(out, {
+                    "review_summary": {"summary": "Synthesized."},
+                    "pr_summary": {
+                        "intent": "Add auth.",
+                        "work_type": "feature",
+                        "biggest_unknown": None,
+                        "implementation_summary": "Add auth.",
+                    },
+                })
+                return
+            builder.write_json(out, partials[len(calls)])
+            calls.append(_s)
+
+        pi.run_json.side_effect = fake_run_json
+        pi.token_usage = {"in": 0, "out": 0, "total": 0}
+        pi.invocation_count = 0
+        pi.repair_invocation_count = 0
+        ctx = _stage_context(cfg, pi)
+        ctx.state.diff_text = (
+            "diff --git a/a.py b/a.py\n+@@ -1 +1 @@\n-old\n+new\n"
+            "diff --git a/b.py b/b.py\n+@@ -1 +1 @@\n-old\n+new\n"
+        )
+
+        result = SinglePiReasoningEngine().execute(ctx)
+
+        assert len(result.test_gaps) == 1
+        assert len(result.escalation_hints) == 1
+        assert result.escalation_hints[0].danger == "critical"
+        assert len(result.discarded_findings) == 1
+
+
+class TestDeterministicNormalization:
+    def _payload(self, *, biggest_unknown: str | None) -> dict:
+        payload = _valid_review_result_payload()
+        payload["pr_summary"]["biggest_unknown"] = biggest_unknown
+        payload["pr_summary"]["architectural_impact"] = "invented impact"
+        return payload
+
+    def test_missing_architecture_is_normalized_and_confidence_downgrades(self, tmp_path: Path):
+        cfg = _cfg(tmp_path)
+        pi = MagicMock()
+        payload = self._payload(biggest_unknown="reachability unclear")
+        pi.run_json.side_effect = lambda _p, _s, out, _st: builder.write_json(out, payload)
+        pi.last_tokens = {"in": 1, "out": 1, "total": 2}
+        ctx = _stage_context(cfg, pi)
+
+        result = SinglePiReasoningEngine().execute(ctx)
+
+        assert result.pr_summary.architectural_impact == "no significant architectural impact"
+        assert result.review_confidence.level == "medium"
+        assert result.metrics.confidence == "medium"
+
+
+class TestEscalationPolicy:
+    def test_escalation_disabled_makes_no_extra_call(self, tmp_path: Path):
+        cfg = _cfg(tmp_path)
+        pi = MagicMock()
+        payload = _valid_review_result_payload()
+        payload["escalation_hints"] = [
+            {"files": ["a.py"], "reason": "auth path", "suggested_focus": "security-audit", "danger": "critical"}
+        ]
+        pi.run_json.side_effect = lambda _p, _s, out, _st: builder.write_json(out, payload)
+        pi.last_tokens = {"in": 1, "out": 1, "total": 2}
+        ctx = _stage_context(cfg, pi)
+
+        result = SinglePiReasoningEngine().execute(ctx)
+
+        assert len(result.escalation_hints) == 1
+        assert pi.run_json.call_count == 1
+
+    def test_escalation_enabled_runs_focused_pass(self, tmp_path: Path):
+        cfg = replace(_cfg(tmp_path), escalation_review_enabled=True)
+        pi = MagicMock()
+        payload = _valid_review_result_payload()
+        payload["escalation_hints"] = [
+            {"files": ["a.py"], "reason": "auth path", "suggested_focus": "security-audit", "danger": "critical"}
+        ]
+
+        def fake_run_json(_p, _s, out, stage):
+            if stage == "escalation review":
+                builder.write_json(out, _valid_review_result_payload())
+                return
+            builder.write_json(out, payload)
+
+        pi.run_json.side_effect = fake_run_json
+        pi.last_tokens = {"in": 1, "out": 1, "total": 2}
+        ctx = _stage_context(cfg, pi)
+
+        result = SinglePiReasoningEngine().execute(ctx)
+
+        assert pi.run_json.call_count == 2
+        assert len(result.findings) == 1
 
 class TestMultiStageReasoningEngine:
     def test_build_pr_summary(self, tmp_path: Path):
