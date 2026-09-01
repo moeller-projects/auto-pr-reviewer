@@ -756,14 +756,20 @@ def _annotate_stale(
     if not stale:
         return
     short_sha = _short_sha(pr) or ""
+    annotated: list[int | str] = []
     for entry in stale:
         try:
-            client.add_comment(pr_id, entry["threadId"], stale_comment_body(short_sha=short_sha))
+            client.add_comment(
+                pr_id,
+                entry["threadId"],
+                stale_comment_body(short_sha=short_sha, key=entry.get("key")),
+            )
+            annotated.append(entry["threadId"])
         except Exception as exc:  # noqa: BLE001 — best-effort
             log(f"failed to annotate stale thread {entry['threadId']}: {exc}")
-    result["annotated_stale"] = len(stale)
-    result["stale_thread_ids"] = [entry["threadId"] for entry in stale]
-    log(f"annotated {len(stale)} stale thread(s)")
+    result["annotated_stale"] = len(annotated)
+    result["stale_thread_ids"] = annotated
+    log(f"annotated {len(annotated)} stale thread(s)")
 
 
 def _apply_vote(

@@ -38,6 +38,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 from ..config import Config, _ENV_ALIASES
@@ -350,39 +351,67 @@ class PiCliRunner:
     ) -> subprocess.CompletedProcess[bytes]:
         self._invocation_count += 1
         started = time.monotonic()
+        marker = " repair (in session)" if repair and self.cfg.pi_session_enabled else " repair" if repair else ""
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            **({"cwd": str(self._working_dir)} if self._working_dir else {}),
+        )
         try:
-            cp = subprocess.run(
-                cmd,
-                input=input_data,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=self.cfg.pi_timeout_secs,
-                env=env,
-                **({"cwd": str(self._working_dir)} if self._working_dir else {}),
-            )
-        except subprocess.TimeoutExpired as exc:
-            self._record_invocation(
+            proc.stdin.write(input_data)
+        except BrokenPipeError:
+            pass
+        finally:
+            proc.stdin.close()
+
+        # Stream stderr lines to the run log as they arrive, while
+        # accumulating them for post-hoc token/context parsing. stdout is
+        # drained concurrently so a large response cannot deadlock the child,
+        # and the main thread enforces the timeout via ``proc.wait``.
+        stderr_lines: list[str] = []
+        stdout_holder: list[bytes] = []
+
+        def _stream_stderr() -> None:
+            assert proc.stderr is not None
+            for raw in proc.stderr:
+                line = raw.decode(errors="replace").rstrip("\n")
+                stderr_lines.append(line)
+                _log(f"[pi {stage}{marker}] {line}")
+
+        def _drain_stdout() -> None:
+            assert proc.stdout is not None
+            stdout_holder.append(proc.stdout.read())
+
+        err_thread = threading.Thread(target=_stream_stderr, daemon=True)
+        out_thread = threading.Thread(target=_drain_stdout, daemon=True)
+        err_thread.start()
+        out_thread.start()
+
+        timed_out = False
+        try:
+            proc.wait(timeout=self.cfg.pi_timeout_secs)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            proc.kill()
+            proc.wait()
+        err_thread.join()
+        out_thread.join()
+        stdout_bytes = stdout_holder[0] if stdout_holder else b""
+
+        stderr_text = "\n".join(stderr_lines)
+        duration_ms = int((time.monotonic() - started) * 1000)
+        if timed_out:
+            self._record_timeout(
                 stage=stage,
                 repair=repair,
                 attempt=attempt,
-                returncode=None,
-                timed_out=True,
-                stdout_bytes=len(exc.stdout or b""),
-                stdout_text=(exc.stdout or b"").decode(errors="replace"),
-                stderr_bytes=exc.stderr or b"",
-                tokens={},
-                duration_ms=int((time.monotonic() - started) * 1000),
+                stdout_bytes=stdout_bytes,
+                stderr_text=stderr_text,
+                duration_ms=duration_ms,
             )
-            message = (
-                f"[review][ERROR] Pi {stage} repair timed out"
-                if repair
-                else f"[review][ERROR] Pi {stage} timed out after {self.cfg.pi_timeout_secs}s"
-            )
-            raise PiExecutionError(message, details={"stage": stage, "repair": repair}) from exc
-        stderr_text = cp.stderr.decode(errors="replace")
-        for line in stderr_text.splitlines():
-            marker = " repair (in session)" if repair and self.cfg.pi_session_enabled else " repair" if repair else ""
-            _log(f"[pi {stage}{marker}] {line}")
         tokens = self._parse_token_usage(stderr_text)
         self._record_context_reads(_parse_context_file_reads(stderr_text))
         self._record_tokens(tokens)
@@ -390,15 +419,45 @@ class PiCliRunner:
             stage=stage,
             repair=repair,
             attempt=attempt,
-            returncode=cp.returncode,
+            returncode=proc.returncode,
             timed_out=False,
-            stdout_bytes=len(cp.stdout),
-            stdout_text=cp.stdout.decode(errors="replace"),
-            stderr_bytes=cp.stderr,
+            stdout_bytes=len(stdout_bytes),
+            stdout_text=stdout_bytes.decode(errors="replace"),
+            stderr_bytes=stderr_text.encode(errors="replace"),
             tokens=tokens,
-            duration_ms=int((time.monotonic() - started) * 1000),
+            duration_ms=duration_ms,
         )
-        return cp
+        return subprocess.CompletedProcess(cmd, proc.returncode, stdout_bytes, stderr_text.encode(errors="replace"))
+
+    def _record_timeout(
+        self,
+        *,
+        stage: str,
+        repair: bool,
+        attempt: int | None,
+        stdout_bytes: bytes,
+        stderr_text: str,
+        duration_ms: int,
+    ) -> None:
+        """Record a timed-out invocation and raise the corresponding error."""
+        self._record_invocation(
+            stage=stage,
+            repair=repair,
+            attempt=attempt,
+            returncode=None,
+            timed_out=True,
+            stdout_bytes=len(stdout_bytes),
+            stdout_text=stdout_bytes.decode(errors="replace"),
+            stderr_bytes=stderr_text.encode(errors="replace"),
+            tokens={},
+            duration_ms=duration_ms,
+        )
+        message = (
+            f"[review][ERROR] Pi {stage} repair timed out"
+            if repair
+            else f"[review][ERROR] Pi {stage} timed out after {self.cfg.pi_timeout_secs}s"
+        )
+        raise PiExecutionError(message, details={"stage": stage, "repair": repair})
 
 
     def _run_primary_with_retry(
@@ -470,16 +529,32 @@ class PiCliRunner:
         if not output_path.stat().st_size:
             raise PiExecutionError(f"[review][ERROR] pi {stage} produced no output", details={"stage": stage})
         self._warn_missing_token_usage(stage)
+        if self._valid_json(output_path):
+            return
+        self._run_repair(resolved_prompt, stdin_text, stage, env, output_path)
+
+    def _valid_json(self, output_path: Path) -> bool:
+        """Return ``True`` if ``output_path`` holds valid JSON, stripping fences once."""
         try:
             json.loads(output_path.read_text())
-            return
+            return True
         except Exception:
             strip_json_fences(output_path)
         try:
             json.loads(output_path.read_text())
-            return
+            return True
         except Exception:
-            pass
+            return False
+
+    def _run_repair(
+        self,
+        resolved_prompt: Path,
+        stdin_text: str,
+        stage: str,
+        env: dict[str, str],
+        output_path: Path,
+    ) -> None:
+        """Re-ask Pi for valid JSON in the same session after a bad response."""
         _log(
             f"running Pi {stage} repair ({'in session' if self.cfg.pi_session_enabled else 'legacy mode'})"
         )
@@ -501,14 +576,11 @@ class PiCliRunner:
             )
         output_path.write_bytes(cp.stdout)
         self._warn_missing_token_usage(f"{stage} repair")
-        strip_json_fences(output_path)
-        try:
-            json.loads(output_path.read_text())
-        except Exception as exc:
+        if not self._valid_json(output_path):
             raise PiExecutionError(
                 f"[review][ERROR] pi {stage} repair call produced invalid JSON",
                 details={"stage": stage, "repair": True},
-            ) from exc
+            )
 
 
 PiRunner = PiCliRunner

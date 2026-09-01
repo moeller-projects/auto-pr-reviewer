@@ -22,6 +22,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+from conftest import FakePopen
 
 import pytest
 
@@ -749,12 +750,12 @@ class TestPiRunner:
         cfg = make_cfg(tmp_path)
         seen_env = {}
 
-        def fake_run(cmd, input, stdout, stderr, timeout, env):
-            seen_env.update(env)
-            return subprocess.CompletedProcess(cmd, 0, b'{"ok": true}', b"warn\n")
+        def fake_popen(cmd, env=None, **k):
+            seen_env.update(env or {})
+            return FakePopen(cmd, returncode=0, stdout=b'{"ok": true}', stderr=b"warn\n")
 
         monkeypatch.setenv("ADO_AUTH_TOKEN", "secret")
-        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.Popen", fake_popen)
         prompt = tmp_path / "prompt.md"
         prompt.write_text("base prompt", encoding="utf-8")
         output = tmp_path / "pi.json"
@@ -767,13 +768,13 @@ class TestPiRunner:
         cfg = make_cfg(tmp_path)
         calls = []
 
-        def fake_run(cmd, input, stdout, stderr, timeout, env):
+        def fake_popen(cmd, **k):
             calls.append(cmd)
             if len(calls) == 1:
-                return subprocess.CompletedProcess(cmd, 0, b"not json", b"")
-            return subprocess.CompletedProcess(cmd, 0, b'{"repaired": true}', b"")
+                return FakePopen(cmd, returncode=0, stdout=b"not json")
+            return FakePopen(cmd, returncode=0, stdout=b'{"repaired": true}')
 
-        monkeypatch.setattr("reviewforge.ai.runner.subprocess.run", fake_run)
+        monkeypatch.setattr("reviewforge.ai.runner.subprocess.Popen", fake_popen)
         prompt = tmp_path / "prompt.md"
         prompt.write_text("base prompt", encoding="utf-8")
         output = tmp_path / "pi.json"
@@ -784,8 +785,8 @@ class TestPiRunner:
     def test_run_json_raises_on_nonzero(self, tmp_path, monkeypatch):
         cfg = make_cfg(tmp_path)
         monkeypatch.setattr(
-            "reviewforge.ai.runner.subprocess.run",
-            lambda *a, **k: subprocess.CompletedProcess([], 9, b"", b"bad"),
+            "reviewforge.ai.runner.subprocess.Popen",
+            lambda cmd, **k: FakePopen(cmd, returncode=9, stdout=b"", stderr=b"bad"),
         )
         prompt = tmp_path / "prompt.md"
         prompt.write_text("base prompt", encoding="utf-8")

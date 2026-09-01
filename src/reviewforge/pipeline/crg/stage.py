@@ -128,27 +128,40 @@ def _optional_analysis(
             continue
         started = time.monotonic()
         try:
-            if key == "api_surface":
-                from .snapshots import api_surface, build_base_snapshot, snapshot
-                base = build_base_snapshot(ctx, tool_version)
-                value = {"status": "ok", "base_commit": getattr(ctx.state, "base_commit", ""), **api_surface(base, snapshot(store), changed_files)}
-            elif key == "flows":
-                from .flows import flows
-                value = flows(store, changed_files)
-            else:
-                from .architecture import architecture
-                value = architecture(store, changed_files)
+            value = _run_analysis(key, ctx, store, changed_files, tool_version)
         except Exception as exc:
             log_warning(f"{message} ({type(exc).__name__}: {exc})")
-            if key == "api_surface":
-                value = {"status": "degraded", "base_commit": getattr(ctx.state, "base_commit", ""), "added_nodes": [], "removed_nodes": [], "changed_nodes": [], "added_edges": [], "removed_edges": [], "truncated": False, "breaking_candidates": [], "error": str(exc)}
-            elif key == "flows":
-                value = {"status": "degraded", "affected_count": 0, "top": [], "error": str(exc)}
-            else:
-                value = {"status": "degraded", "hubs_touched": [], "bridges_touched": [], "communities_crossed": 0, "community_labels": {}, "error": str(exc)}
+            value = _degraded_value(key, ctx, exc)
         graph_context[key] = value
         details[metric] = int((time.monotonic() - started) * 1000)
     return graph_context, details
+
+
+def _run_analysis(
+    key: str,
+    ctx: StageContext,
+    store: Any,
+    changed_files: list[str],
+    tool_version: str,
+) -> dict[str, Any]:
+    if key == "api_surface":
+        from .snapshots import api_surface, build_base_snapshot, snapshot
+        base = build_base_snapshot(ctx, tool_version)
+        return {"status": "ok", "base_commit": getattr(ctx.state, "base_commit", ""), **api_surface(base, snapshot(store), changed_files)}
+    if key == "flows":
+        from .flows import flows
+        return flows(store, changed_files)
+    from .architecture import architecture
+    return architecture(store, changed_files)
+
+
+def _degraded_value(key: str, ctx: StageContext, exc: Exception) -> dict[str, Any]:
+    base_commit = getattr(ctx.state, "base_commit", "")
+    if key == "api_surface":
+        return {"status": "degraded", "base_commit": base_commit, "added_nodes": [], "removed_nodes": [], "changed_nodes": [], "added_edges": [], "removed_edges": [], "truncated": False, "breaking_candidates": [], "error": str(exc)}
+    if key == "flows":
+        return {"status": "degraded", "affected_count": 0, "top": [], "error": str(exc)}
+    return {"status": "degraded", "hubs_touched": [], "bridges_touched": [], "communities_crossed": 0, "community_labels": {}, "error": str(exc)}
 class EnrichWithCrgStage(Stage):
     """Build a Tree-sitter knowledge graph and analyse the PR diff."""
 

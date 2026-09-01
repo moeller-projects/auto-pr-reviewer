@@ -41,10 +41,12 @@ def test_persists_pi_stderr_in_run_log(tmp_path, monkeypatch):
         pi_retry_base_delay=0.0,
         pi_retry_cap_delay=0.0,
     )
+    from conftest import FakePopen
+
     monkeypatch.setattr(
-        "reviewforge.ai.runner.subprocess.run",
-        lambda *args, **kwargs: SimpleNamespace(
-            stdout=b'{"summary":"","findings":[]}', stderr=b"pi diagnostic\n", returncode=0
+        "reviewforge.ai.runner.subprocess.Popen",
+        lambda cmd, **kwargs: FakePopen(
+            cmd, returncode=0, stdout=b'{"summary":"","findings":[]}', stderr=b"pi diagnostic\n"
         ),
     )
 
