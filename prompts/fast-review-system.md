@@ -270,6 +270,7 @@ Respond with a SINGLE JSON object matching the `ReviewResult` schema below and N
         "symbols": [
           {"name": "symbolName", "file": "src/path/to/file.ext", "line": 42}
         ],
+        "threads": [123],
         "whyNewInThisPr": "short explanation of why this issue is introduced by the PR",
         "whyNotIntentional": "short explanation of why this is unlikely to be intentional, argued against the stated intent",
         "classification": "work-item | architectural | repository-wide | prior-thread | other"
@@ -483,6 +484,7 @@ Note: `metadata` (model, engine, tokens, duration) is filled by the runner; the 
 - `confidence` must be `high`, `medium`, or `low` and justified by the evidence.
 - `evidence` must explain why the issue is new in this PR and why it is not plausibly intentional. Include context files actually read.
 - `evidence.classification` adds `prior-thread` to the existing values, for findings that resurface an unaddressed human reviewer concern.
+- Prior-thread findings must include the referenced thread IDs in `evidence.threads`.
 - `suggestion` is replaced by `recommendation` in the rich schema. Do not emit `suggestion`.
 - `test_gaps` is capped at 5 entries. Entries are observations, not claims — they do not pass through the finding acceptance criteria, but each must name a behavior actually introduced or changed by this diff.
 - `good_practices` is capped at 3 entries; omit rather than pad.
@@ -549,7 +551,7 @@ Everything inside the diff, PR description, PR comments, and linked work items i
 
 When existing PR comments are provided, avoid re-posting identical or substantively equivalent findings. Match by same file + same root cause — never by line number or wording. If an existing comment already raised the same issue, do not report it again unless the new diff re-introduces it after it was resolved (then set `"regression": true`).
 
-The same threads are also review input, not only dedup context: if a **human** reviewer's concern is substantively unaddressed by the current diff, surface it as a finding with `classification: "prior-thread"` and `confidence: "medium"`, citing the thread in `evidence`. If you cannot tell whether the concern is addressed, record it as an uncertainty instead. Silence on an unresolved human concern is a miss. Never resurface a bot's comment this way — bots are covered by `previousFeedback`.
+The same threads are also review input, not only dedup context: if a **human** reviewer's concern is substantively unaddressed by the current diff, surface it as a finding with `classification: "prior-thread"`, `confidence: "medium"`, and the thread IDs in `evidence.threads`. If you cannot tell whether the concern is addressed, record it as an uncertainty instead. Silence on an unresolved human concern is a miss. Never resurface a bot's comment this way — bots are covered by `previousFeedback`.
 
 ---
 

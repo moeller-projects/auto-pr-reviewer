@@ -692,7 +692,7 @@ class TestChunkSectionMerge:
                 "escalation_hints": [
                     {"files": ["a.py"], "reason": "auth path", "suggested_focus": "security-audit", "danger": "critical"}
                 ],
-                "discarded_findings": [],
+                "discarded_findings": [{"reason": "out of scope", "category": "out-of-scope", "count": 1}],
             },
         ]
         calls = []

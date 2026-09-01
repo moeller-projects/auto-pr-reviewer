@@ -118,7 +118,7 @@ def _has_evidence_reference(evidence: dict[str, Any]) -> bool:
         evidence.get(key)
         for key in (
             "changedLines", "changed_lines", "contextFilesRead", "context_files_read",
-            "testsRead", "tests_read", "workItems", "work_items", "symbols",
+            "testsRead", "tests_read", "workItems", "work_items", "symbols", "threads",
         )
     )
 def _validate_postable_finding(finding: dict[str, Any]) -> None:

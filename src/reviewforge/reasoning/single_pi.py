@@ -381,6 +381,7 @@ def _new_merge_state() -> dict[str, Any]:
         "seen_gaps": set(),
         "seen_hints": set(),
         "seen_uncertainties": set(),
+        "seen_discarded": set(),
     }
 
 
@@ -415,13 +416,18 @@ def _uncertainty_key(item: Any) -> tuple[str, str]:
     return (item.topic.casefold().strip(), item.reason.casefold().strip())
 
 
+def _discarded_key(item: Any) -> tuple[str, str]:
+    return (item.category.casefold().strip(), item.reason.casefold().strip())
+
+
 def _merge_chunk(partial: ChunkResult, state: dict[str, Any]) -> None:
     _merge_unique(state, partial.findings, "seen_findings", "findings", _finding_key)
     _merge_unique(state, partial.test_gaps, "seen_gaps", "test_gaps", _gap_key)
     _merge_unique(state, partial.escalation_hints, "seen_hints", "escalation_hints", _hint_key)
     _merge_unique(state, partial.uncertainties, "seen_uncertainties", "uncertainties", _uncertainty_key)
-    state["discarded_findings"].extend(
-        item.model_dump(by_alias=True) for item in partial.discarded_findings
+    _merge_unique(
+        state, partial.discarded_findings, "seen_discarded", "discarded_findings",
+        _discarded_key,
     )
 
 

@@ -305,23 +305,23 @@ def classify_threads(threads: Iterable[dict[str, Any]]) -> BotMarkers:
 # re-runs are idempotent without extra state.
 
 
-def _comment_author_key(comment: dict[str, Any]) -> str:
-    """Return a stable author key: ADO id, else uniqueName/displayName."""
+def _comment_author_keys(comment: dict[str, Any]) -> set[str]:
+    """Return all available author identifiers."""
     author = comment.get("author")
     if not isinstance(author, dict):
-        return str(author or comment.get("authorId") or "").strip().lower()
-    for key in ("id", "uniqueName", "displayName"):
-        value = str(author.get(key) or "").strip()
-        if value:
-            return value.lower()
-    return ""
+        value = str(author or comment.get("authorId") or "").strip().lower()
+        return {value} if value else set()
+    return {
+        value.lower()
+        for key in ("id", "uniqueName", "displayName")
+        if (value := str(author.get(key) or "").strip())
+    }
 
 
 def _is_bot_comment(comment: dict[str, Any], bot_authors: set[str]) -> bool:
     if _MARKER_RE.search(comment.get("content") or ""):
         return True
-    key = _comment_author_key(comment)
-    return bool(key) and key in bot_authors
+    return bool(_comment_author_keys(comment) & bot_authors)
 
 
 def _marker_authors(comments: Iterable[dict[str, Any]]) -> set[str]:
@@ -330,9 +330,7 @@ def _marker_authors(comments: Iterable[dict[str, Any]]) -> set[str]:
     for comment in comments:
         if not _MARKER_RE.search(comment.get("content") or ""):
             continue
-        key = _comment_author_key(comment)
-        if key:
-            authors.add(key)
+        authors.update(_comment_author_keys(comment))
     return authors
 
 
