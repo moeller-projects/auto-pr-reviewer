@@ -792,6 +792,53 @@ class TestEscalationPolicy:
         assert pi.run_json.call_count == 2
         assert len(result.findings) == 1
 
+def _write_debug_first_pass(c):
+    for path, n in [
+        (c.artifacts.intent, 0),
+        (c.artifacts.plan, 0),
+        (c.artifacts.collected, 0),
+        (c.artifacts.digest, 0),
+        (c.artifacts.candidate, 5),
+        (c.artifacts.verified, 3),
+    ]:
+        builder.write_json(path, {"summary": "", "findings": [{"i": i} for i in range(n)]})
+    severity_finding = {
+        "title": "Bug",
+        "message": "It breaks.",
+        "severity": "minor",
+        "suggestion": "Fix it.",
+        "file": "b.py",
+        "line": 5,
+        "evidence": {
+            "changedLines": [5],
+            "contextFilesRead": ["b.py"],
+            "whyNewInThisPr": "Introduced here.",
+            "whyNotIntentional": "No equivalent guard exists.",
+        },
+    }
+    builder.write_json(c.artifacts.severity, {"summary": "", "findings": [severity_finding]})
+    c.intent = {"pr_intent": "debug", "risk_areas": []}
+    c.plan = {"pr_intent": "debug", "files_to_read": [], "searches_to_run": [], "tests_to_inspect": []}
+    c.collected = {"tests": []}
+    c.digest = {"possible_intentional_choices": []}
+    c.candidate = {"summary": "", "findings": [{"i": i} for i in range(5)]}
+    c.verified = {"summary": "", "findings": [{"i": i} for i in range(3)]}
+    c.severity = {"summary": "", "findings": [severity_finding]}
+
+
+def _debug_intermediate_stages(call_count: list[int]):
+    def fake_run_stages(stages, c):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            _write_debug_first_pass(c)
+        return [
+            StageResult(name=s.name, status=StageStatus.OK, started_at="t1", finished_at="t2", duration_ms=1)
+            for s in stages
+        ]
+
+    return fake_run_stages
+
+
 class TestMultiStageReasoningEngine:
     def test_build_pr_summary(self, tmp_path: Path):
         cfg = _cfg(tmp_path)
@@ -908,60 +955,12 @@ class TestMultiStageReasoningEngine:
     def test_debug_intermediates_captures_fragment_counts(self, tmp_path: Path, monkeypatch):
         cfg = _cfg(tmp_path)
         ctx = _stage_context(cfg, MagicMock())
-        call_count = 0
-
-        def fake_run_stages(stages, c):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                for path, n in [
-                    (c.artifacts.intent, 0),
-                    (c.artifacts.plan, 0),
-                    (c.artifacts.collected, 0),
-                    (c.artifacts.digest, 0),
-                    (c.artifacts.candidate, 5),
-                    (c.artifacts.verified, 3),
-                ]:
-                    builder.write_json(path, {"summary": "", "findings": [{"i": i} for i in range(n)]})
-                severity_finding = {
-                    "title": "Bug",
-                    "message": "It breaks.",
-                    "severity": "minor",
-                    "suggestion": "Fix it.",
-                    "file": "b.py",
-                    "line": 5,
-                    "evidence": {
-                        "changedLines": [5],
-                        "contextFilesRead": ["b.py"],
-                        "whyNewInThisPr": "Introduced here.",
-                        "whyNotIntentional": "No equivalent guard exists.",
-                    },
-                }
-                builder.write_json(
-                    c.artifacts.severity,
-                    {"summary": "", "findings": [severity_finding]},
-                )
-                c.intent = {"pr_intent": "debug", "risk_areas": []}
-                c.plan = {"pr_intent": "debug", "files_to_read": [], "searches_to_run": [], "tests_to_inspect": []}
-                c.collected = {"tests": []}
-                c.digest = {"possible_intentional_choices": []}
-                c.candidate = {"summary": "", "findings": [{"i": i} for i in range(5)]}
-                c.verified = {"summary": "", "findings": [{"i": i} for i in range(3)]}
-                c.severity = {"summary": "", "findings": [severity_finding]}
-            return [
-                StageResult(
-                    name=s.name,
-                    status=StageStatus.OK,
-                    started_at="t1",
-                    finished_at="t2",
-                    duration_ms=1,
-                )
-                for s in stages
-            ]
+        call_count = [0]
+        fake_run_stages = _debug_intermediate_stages(call_count)
 
         monkeypatch.setattr("reviewforge.reasoning.multi_stage.run_stages", fake_run_stages)
         MultiStageReasoningEngine().execute(ctx)
-        assert call_count == 2
+        assert call_count[0] == 2
         assert ctx.extras["_finding_counts"] == {
             "candidate": 5,
             "verified": 3,

@@ -22,7 +22,13 @@ previews a single-review invocation without spawning a container.
 
 `run-open-prs` keeps batch selection semantics: `--max-pull-requests` caps
 the sorted matching set before review, and `--interactive` accepts `all`,
-`none`, comma-separated indexes, and inclusive ranges such as `1,3-5`.
+`none`, positional indexes, inclusive index ranges such as `1,3-5`, and
+exact pull-request IDs. Comma-separated selectors may be combined; selections
+are deduplicated and reviewed in displayed order.
+
+`--keep-container` retains stopped review containers while keeping execution
+detached. Without it, generated runs include `--rm -d`; with it, they include
+`-d` without `--rm`.
 
 ## PowerShell compatibility
 

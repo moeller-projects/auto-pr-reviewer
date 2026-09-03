@@ -11,6 +11,9 @@ from __future__ import annotations
 import json
 import time
 from typing import Any, Callable
+
+from pydantic import ValidationError
+
 from ..artifacts.builder import read_json
 from ..exceptions import ReasoningEngineError, SchemaValidationError
 from ..git import ops as git_ops
@@ -358,6 +361,18 @@ def _select_chunks(ctx: StageContext, diff_text: str) -> list[str]:
     return _diff_chunks(diff_text, cfg.max_diff_bytes)
 
 
+def _format_validation_error(exc: Exception) -> str:
+    """Render a Pydantic ``ValidationError`` as a compact field-level message."""
+    if not isinstance(exc, ValidationError):
+        return str(exc)
+    parts = []
+    for item in exc.errors(include_url=False):
+        loc = ".".join(str(part) for part in item.get("loc", ()))
+        msg = item.get("msg", "")
+        parts.append(f"{loc}: {msg}" if loc else msg)
+    return "; ".join(parts) or str(exc)
+
+
 def _single_pass(ctx: StageContext, cfg: Any) -> ReviewResult:
     output_path = ctx.artifacts.raw_dir / "fast-review.json"
     ctx.pi.run_json(cfg.fast_review_prompt_path, _build_single_pi_instruction(ctx), output_path, "single-pi reasoning")
@@ -367,7 +382,10 @@ def _single_pass(ctx: StageContext, cfg: Any) -> ReviewResult:
     try:
         return ReviewResult.model_validate(raw)
     except Exception as exc:
-        raise SchemaValidationError("single-pi response does not match ReviewResult schema", details={"error": str(exc), "output_path": str(output_path)}) from exc
+        raise SchemaValidationError(
+            f"single-pi response does not match ReviewResult schema: {_format_validation_error(exc)}",
+            details={"error": str(exc), "output_path": str(output_path)},
+        ) from exc
 
 
 def _new_merge_state() -> dict[str, Any]:
@@ -456,7 +474,7 @@ def _chunked_pass(
             partial = ChunkResult.model_validate(read_json(output_path))
         except Exception as exc:
             raise SchemaValidationError(
-                "single-pi chunk response does not match ChunkResult schema",
+                f"single-pi chunk response does not match ChunkResult schema: {_format_validation_error(exc)}",
                 details={"error": str(exc), "output_path": str(output_path)},
             ) from exc
         current = _runner_usage(ctx.pi)

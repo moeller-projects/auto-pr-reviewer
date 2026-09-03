@@ -270,7 +270,7 @@ Respond with a SINGLE JSON object matching the `ReviewResult` schema below and N
         "symbols": [
           {"name": "symbolName", "file": "src/path/to/file.ext", "line": 42}
         ],
-        "threads": [123],
+        "threads": ["123"],
         "whyNewInThisPr": "short explanation of why this issue is introduced by the PR",
         "whyNotIntentional": "short explanation of why this is unlikely to be intentional, argued against the stated intent",
         "classification": "work-item | architectural | repository-wide | prior-thread | other"
@@ -484,7 +484,7 @@ Note: `metadata` (model, engine, tokens, duration) is filled by the runner; the 
 - `confidence` must be `high`, `medium`, or `low` and justified by the evidence.
 - `evidence` must explain why the issue is new in this PR and why it is not plausibly intentional. Include context files actually read.
 - `evidence.classification` adds `prior-thread` to the existing values, for findings that resurface an unaddressed human reviewer concern.
-- Prior-thread findings must include the referenced thread IDs in `evidence.threads`.
+- Prior-thread findings must include the referenced thread IDs in `evidence.threads`, each as a **string** (e.g. `["58025"]`, not `[58025]`).
 - `suggestion` is replaced by `recommendation` in the rich schema. Do not emit `suggestion`.
 - `test_gaps` is capped at 5 entries. Entries are observations, not claims — they do not pass through the finding acceptance criteria, but each must name a behavior actually introduced or changed by this diff.
 - `good_practices` is capped at 3 entries; omit rather than pad.
