@@ -29,6 +29,9 @@ Precedence is CLI override > process environment > `.env` file for most fields. 
 | pi_session_enabled | `PI_SESSION_ENABLED` | true |
 | pi_session_clear | `PI_SESSION_CLEAR` | false |
 | pi_session_id | `PI_SESSION_ID` | unset |
+| pi_retry_attempts | `PI_RETRY_ATTEMPTS` | `2` |
+| pi_retry_base_delay | `PI_RETRY_BASE_DELAY` | `5` |
+| pi_retry_cap_delay | `PI_RETRY_CAP_DELAY` | `60` |
 
 Posting fields are `POST_MIN_SEVERITY`, `DROP_LOW_CONFIDENCE`, `REQUIRE_CONTEXT_FOR`, `MAX_FINDINGS`, `VOTE_WAITING_ON`, and `FAIL_ON`. `POST_MIN_SEVERITY` defaults to `none` in both the pipeline and the legacy `python -m reviewforge.ado.cli post-findings` helper. Other defaults are `DROP_LOW_CONFIDENCE=false`, `REQUIRE_CONTEXT_FOR` empty, `MAX_FINDINGS` unset, `VOTE_WAITING_ON=none`, and `FAIL_ON=none`. Context caps default to `CONTEXT_FILE_MAX_LINES=260`, `CONTEXT_SEARCH_MAX_MATCHES=40`, and `COLLECT_CONTEXT_WORKERS=8`.
 

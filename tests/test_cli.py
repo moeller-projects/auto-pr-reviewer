@@ -703,38 +703,17 @@ class TestRefactoredWrappers:
 
     @staticmethod
     def _parse_powershell_param_names(text: str) -> set[str]:
-        """Extract declared param names from a PowerShell param block.
-
-        Tolerant to ``[type]`` and ``[type[]]`` attribute forms and to
-        any amount of whitespace between the attribute and ``$Name``.
-        Switches outside the main param block (they appear before it
-        in some scripts) are also captured.
-        """
-        names: set[str] = set()
-        in_param = False
-        for line in text.splitlines():
-            if "[CmdletBinding()]" in line:
-                in_param = True
-                continue
-            if in_param and line.startswith(")"):
-                break
-            if in_param:
-                stripped = line.strip()
-                # Match any [attribute] (possibly with extra [..] for
-                # array types) followed by $Name. The non-greedy match
-                # captures the first $[identifier] on the line.
-                m = re.search(
-                    r"\[[^\]]*(?:\[[^\]]*\])*\]\s*\$([A-Za-z_][A-Za-z0-9_]*)",
-                    stripped,
-                )
-                if m:
-                    names.add(m.group(1))
-            stripped = line.strip()
-            if stripped.startswith("[switch]"):
-                m = re.search(r"\[switch\]\s*\$([A-Za-z_][A-Za-z0-9_]*)", stripped)
-                if m:
-                    names.add(m.group(1))
-        return names
+        """Extract declared param names from a PowerShell param block."""
+        try:
+            param_block = text.split("[CmdletBinding()]", 1)[1].split(")", 1)[0]
+        except IndexError:
+            param_block = ""
+        typed = re.findall(
+            r"\[[^\]]*(?:\[[^\]]*\])*\]\s*\$([A-Za-z_][A-Za-z0-9_]*)",
+            param_block,
+        )
+        switches = re.findall(r"\[switch\]\s*\$([A-Za-z_][A-Za-z0-9_]*)", text)
+        return set(typed) | set(switches)
 
     @staticmethod
     def _strip_powershell_comments(text: str) -> str:

@@ -85,41 +85,48 @@ class TestUnshallowFallback:
         assert not any("--unshallow" in cmd for cmd in sim.logged)
         assert excinfo.value.details["depths"] == [200, 1200, 6200, 10000]
 
+    def test_failed_prepare_removes_temp_dirs(self, tmp_path, monkeypatch):
+        _GitSim(monkeypatch, shallow=False, unshallow_helps=False)
+
+        with pytest.raises(GitOperationError):
+            git_ops.prepare_repo(_cfg(tmp_path), "feature", "main")
+
+        assert list(tmp_path.iterdir()) == []
+
+
+class _FetchRetrySim:
+    def __init__(self):
+        self.fetch_target_calls = 0
+
+    def run_logged(self, desc: str, cmd: list[str], cwd: Path) -> None:
+        if desc != "git fetch target":
+            return
+        self.fetch_target_calls += 1
+        if self.fetch_target_calls == 1:
+            raise GitOperationError(
+                "[review][ERROR] git fetch target failed with exit code 128",
+                details={"command": cmd, "cwd": str(cwd), "returncode": 128},
+            )
+
+    @staticmethod
+    def run_git(cwd: Path, *args: str, check: bool = True) -> str:
+        outputs = {"merge-base": "base123\n", "rev-parse": "sha\n", "diff": ""}
+        return outputs[args[0]]
+
+    @staticmethod
+    def run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+
 class TestFetchRetries:
     def test_transient_fetch_failure_is_retried(self, tmp_path, monkeypatch):
         monkeypatch.setattr(git_ops, "_repo_url", lambda _cfg: "file:///remote")
-
-        fetch_target_calls = 0
-
-        def fake_run_logged(desc: str, cmd: list[str], cwd: Path) -> None:
-            nonlocal fetch_target_calls
-            if desc == "git fetch target":
-                fetch_target_calls += 1
-                if fetch_target_calls == 1:
-                    raise GitOperationError(
-                        "[review][ERROR] git fetch target failed with exit code 128",
-                        details={"command": cmd, "cwd": str(cwd), "returncode": 128},
-                    )
-
-        def fake_run_git(cwd: Path, *args: str, check: bool = True) -> str:
-            if args[0] == "merge-base":
-                return "base123\n"
-            if args[0] == "rev-parse":
-                return "sha\n"
-            if args[0] == "diff":
-                return ""
-            raise AssertionError(f"unexpected run_git args: {args}")
-
-        def fake_run(cmd, **kwargs):
-            return subprocess.CompletedProcess(cmd, 0, b"", b"")
-
-        monkeypatch.setattr(git_ops, "run_logged", fake_run_logged)
-        monkeypatch.setattr(git_ops, "run_git", fake_run_git)
-        monkeypatch.setattr(git_ops.subprocess, "run", fake_run)
-
+        sim = _FetchRetrySim()
+        monkeypatch.setattr(git_ops, "run_logged", sim.run_logged)
+        monkeypatch.setattr(git_ops, "run_git", sim.run_git)
+        monkeypatch.setattr(git_ops.subprocess, "run", sim.run)
         state = git_ops.prepare_repo(_cfg(tmp_path), "feature", "main")
-
-        assert fetch_target_calls == 2
+        assert sim.fetch_target_calls == 2
         git_ops.cleanup(state)
 
 

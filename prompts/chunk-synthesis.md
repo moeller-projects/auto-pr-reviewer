@@ -18,7 +18,9 @@ shape:
     "approach": "chunked diff review"
   },
   "pr_summary": {
-    "intent": "What the PR is trying to accomplish.",
+    "intent": "What the PR is trying to accomplish (decided in framing).",
+    "work_type": "feature | change | bug | refactor | test-only | docs-config | mixed",
+    "biggest_unknown": "The single largest context gap, or null.",
     "implementation_summary": "What the PR actually changes.",
     "architectural_impact": "Impact on the codebase structure, or empty.",
     "risk_assessment": "Main risks, or empty.",
@@ -30,9 +32,9 @@ shape:
 }
 ```
 
-Rules:
-
 - Base every statement on the chunk analyses; do not invent new findings.
+- `pr_summary.intent` and `pr_summary.work_type` MUST be non-empty; decide them
+  from the merged chunk results before writing the other summaries.
 - `review_summary.summary` and `verification_summary.summary` MUST be
   non-empty strings. Never emit placeholder text such as "Reviewed N chunks."
 - `good_practices` is optional; omit it or return an empty list when nothing

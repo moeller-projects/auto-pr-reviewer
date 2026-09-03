@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import subprocess
+import tempfile
 from pathlib import Path, PureWindowsPath
 
 import pytest
@@ -140,6 +141,30 @@ class TestEnvFile:
         finally:
             Path(path).unlink(missing_ok=True)
 
+    def test_values_with_newlines_are_skipped(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ADO_ORG", "contoso\nINJECTED=1")
+        path, temporary = ops._env_file(str(tmp_path / "absent.env"))
+        try:
+            text = Path(path).read_text(encoding="utf-8")
+            assert "INJECTED" not in text
+        finally:
+            Path(path).unlink(missing_ok=True)
+
+    def test_cmd_run_unlinks_temp_env_file_on_failure(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PI_AUTH_JSON_PATH", str(tmp_path / "missing-auth.json"))
+
+        def boom(_args):
+            raise RuntimeError("run_command blew up")
+
+        monkeypatch.setattr(ops, "_run_overrides", boom)
+        args = _run_args(tmp_path, "--runtime", "docker")
+
+        before = set(Path(tempfile.gettempdir()).glob("reviewforge-*.env"))
+        with pytest.raises(RuntimeError, match="blew up"):
+            ops.cmd_run(args)
+        after = set(Path(tempfile.gettempdir()).glob("reviewforge-*.env"))
+        assert after == before
+
 
 class TestMountSources:
     def test_windows_drive_becomes_podman_path(self):
@@ -201,6 +226,27 @@ class TestRunCommand:
 
         assert "custom-crg:/workspace/crg-cache" in command
         Path(_env_file).unlink(missing_ok=True)
+
+    def test_default_run_removes_container_and_detaches(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PI_AUTH_JSON_PATH", str(tmp_path / "missing-auth.json"))
+        args = _run_args(tmp_path, "--runtime", "docker")
+        command, env_file, _temporary = ops.run_command(args)
+        try:
+            assert "-d" in command
+            assert "--rm" in command
+        finally:
+            Path(env_file).unlink(missing_ok=True)
+
+    def test_keep_container_only_disables_removal(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PI_AUTH_JSON_PATH", str(tmp_path / "missing-auth.json"))
+        args = _run_args(tmp_path, "--runtime", "docker", "--keep-container")
+        command, env_file, _temporary = ops.run_command(args)
+        try:
+            assert "-d" in command
+            assert "--rm" not in command
+        finally:
+            Path(env_file).unlink(missing_ok=True)
+
 
     def test_cache_dir_from_env_file_is_mounted_at_same_path(self, tmp_path, monkeypatch):
         monkeypatch.setenv("PI_AUTH_JSON_PATH", str(tmp_path / "missing-auth.json"))
@@ -330,6 +376,32 @@ class TestSelectPullRequests:
         monkeypatch.setattr("builtins.input", lambda _prompt: "2")
         selected = ops._select_pull_requests(self._items(), interactive=True)
         assert [pr["pullRequestId"] for _p, pr in selected] == [2]
+
+    def test_pr_id_selection(self, monkeypatch):
+        items = [
+            ("P", {"pullRequestId": 101}),
+            ("P", {"pullRequestId": 202}),
+            ("P", {"pullRequestId": 303}),
+        ]
+        monkeypatch.setattr("builtins.input", lambda _prompt: "303,101")
+        selected = ops._select_pull_requests(items, interactive=True)
+        assert [pr["pullRequestId"] for _p, pr in selected] == [101, 303]
+
+    def test_mixed_id_and_index_range_selection(self, monkeypatch):
+        items = [
+            ("P", {"pullRequestId": 101}),
+            ("P", {"pullRequestId": 202}),
+            ("P", {"pullRequestId": 303}),
+        ]
+        monkeypatch.setattr("builtins.input", lambda _prompt: "303,1-2")
+        selected = ops._select_pull_requests(items, interactive=True)
+        assert [pr["pullRequestId"] for _p, pr in selected] == [101, 202, 303]
+
+    def test_unknown_pr_id_raises(self, monkeypatch):
+        monkeypatch.setattr("builtins.input", lambda _prompt: "99")
+        with pytest.raises(RuntimeError, match="pull-request ID not found"):
+            ops._select_pull_requests(self._items(), interactive=True)
+
 
     def test_invalid_selection_raises(self, monkeypatch, capsys):
         monkeypatch.setattr("builtins.input", lambda _prompt: "banana")

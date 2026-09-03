@@ -246,6 +246,34 @@ class TestRunFull:
         assert log.index("stage pi started") < log.index("[pi review] streamed stderr") < log.index("stage pi finished")
         assert "[pi review] streamed stderr" in capsys.readouterr().err
 
+    def test_writes_pi_invocations_artifact(self, cfg, monkeypatch):
+        stubs = [_make_stub("a")]
+        monkeypatch.setattr(orchestrator, "DEFAULT_PIPELINE", stubs)
+        expected = [{"stage": "a", "returncode": 0}]
+
+        class FakePi:
+            invocations = expected
+
+        real_make_ctx = orchestrator._make_stage_context
+
+        def fake_make_ctx(cfg, artifacts, pi):
+            ctx = real_make_ctx(cfg, artifacts, pi)
+            ctx.pi = FakePi()
+            return ctx
+
+        monkeypatch.setattr(orchestrator, "_make_stage_context", fake_make_ctx)
+        run_full(cfg)
+        path = cfg.review_artifact_root / "pr-42" / "runs" / "run-1" / "pi-invocations.json"
+        assert path.exists()
+        assert json.loads(path.read_text()) == expected
+
+    def test_skips_write_when_no_invocations(self, cfg, monkeypatch):
+        stubs = [_make_stub("a")]
+        monkeypatch.setattr(orchestrator, "DEFAULT_PIPELINE", stubs)
+        run_full(cfg)
+        path = cfg.review_artifact_root / "pr-42" / "runs" / "run-1" / "pi-invocations.json"
+        assert not path.exists()
+
 # ---------------------------------------------------------------------------
 # run_review_only
 # ---------------------------------------------------------------------------
